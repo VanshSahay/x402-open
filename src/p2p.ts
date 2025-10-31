@@ -96,8 +96,7 @@ export class P2PManager {
     this.node.handle("/x402/1.0/health", async ({ stream }: any) => {
       const kinds = await this.getSupportedKinds();
       const payload = JSON.stringify({ ok: true, kinds });
-      const writer = stream.sink ? stream : await this.asSink(stream);
-      await writer.sink(this.toIterable(payload));
+      await this.writeAll(stream, payload);
     });
 
     // Announce capabilities periodically
@@ -174,8 +173,7 @@ export class P2PManager {
       const text = await this.readAll(stream);
       const req = JSON.parse(text || "{}");
       const res = await this.handleRequest({ ...base, body: req?.body });
-      const writer = stream.sink ? stream : await this.asSink(stream);
-      await writer.sink(this.toIterable(JSON.stringify(res)));
+      await this.writeAll(stream, JSON.stringify(res));
     };
   }
 
@@ -185,8 +183,7 @@ export class P2PManager {
     const opened = await conn.newStream(protocol);
     const stream = (opened as any)?.stream ?? opened;
     if (!stream) throw new Error("Failed to open stream");
-    const writer = stream.sink ? stream : await this.asSink(stream);
-    await writer.sink(this.toIterable(JSON.stringify(payload)));
+    await this.writeAll(stream, JSON.stringify(payload));
     const text = await this.readAll(stream);
     return JSON.parse(text || "{}") as P2PResponse;
   }
@@ -198,8 +195,7 @@ export class P2PManager {
     const opened = await conn.newStream(protocol);
     const stream = (opened as any)?.stream ?? opened;
     if (!stream) throw new Error("Failed to open stream");
-    const writer = stream.sink ? stream : await this.asSink(stream);
-    await writer.sink(this.toIterable(JSON.stringify(payload)));
+    await this.writeAll(stream, JSON.stringify(payload));
     const text = await this.readAll(stream);
     return JSON.parse(text || "{}") as P2PResponse;
   }
@@ -207,10 +203,33 @@ export class P2PManager {
   private async readAll(stream: any): Promise<string> {
     const decoder = new TextDecoder();
     let out = "";
-    for await (const chunk of stream.source) {
-      out += decoder.decode(chunk, { stream: true });
-    }
-    out += decoder.decode();
+    try {
+      if (stream?.source) {
+        for await (const chunk of stream.source) {
+          out += decoder.decode(chunk, { stream: true });
+        }
+        out += decoder.decode();
+        return out;
+      }
+      if (stream?.readable?.getReader) {
+        const reader = stream.readable.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          out += decoder.decode(value, { stream: true });
+        }
+        out += decoder.decode();
+        return out;
+      }
+      if (typeof stream?.on === "function") {
+        out = await new Promise<string>((resolve) => {
+          const chunks: Uint8Array[] = [];
+          stream.on("data", (c: Uint8Array) => chunks.push(c));
+          stream.on("end", () => resolve(decoder.decode(Buffer.concat(chunks as any))));
+        });
+        return out;
+      }
+    } catch {}
     return out;
   }
 
@@ -220,6 +239,31 @@ export class P2PManager {
     return (async function* () {
       yield data;
     })();
+  }
+
+  private async writeAll(stream: any, text: string): Promise<void> {
+    const iterable = this.toIterable(text);
+    try {
+      if (typeof stream?.sink === "function") {
+        await stream.sink(iterable);
+        return;
+      }
+      if (typeof stream?.write === "function") {
+        for await (const chunk of iterable) {
+          stream.write(chunk);
+        }
+        if (typeof stream?.end === "function") stream.end();
+        return;
+      }
+      if (stream?.writable?.getWriter) {
+        const writer = stream.writable.getWriter();
+        for await (const chunk of iterable) {
+          await writer.write(chunk);
+        }
+        await writer.close();
+        return;
+      }
+    } catch {}
   }
 
   private async asSink(stream: any): Promise<any> {
