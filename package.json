@@ -23,7 +23,8 @@
   "scripts": {
     "dev": "echo 'No runnable entry. Import the package in your app.'",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run --reporter=dot"
   },
   "keywords": [],
   "author": "",
@@ -32,8 +33,11 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^24.9.2",
+    "@types/supertest": "^2.0.16",
+    "supertest": "^7.0.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.4"
   },
   "dependencies": {
     "@solana/kit": "^5.0.0",

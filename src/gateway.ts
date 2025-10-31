@@ -103,6 +103,13 @@ export function createGatewayAdapter(
     } catch {}
 
     try {
+      const inbound = req.body as any;
+      const forwardBody = inbound?.paymentPayload && inbound?.paymentRequirements
+        ? inbound
+        : inbound?.paymentHeader && inbound?.paymentRequirements
+          ? { paymentPayload: { header: inbound.paymentHeader }, paymentRequirements: inbound.paymentRequirements }
+          : inbound;
+
       type Attempt =
         | { kind: "true" }
         | { kind: "false" }
@@ -111,7 +118,7 @@ export function createGatewayAdapter(
 
       const attempts = candidatePeers.map(async (peerId): Promise<Attempt> => {
         try {
-          const response = await facilitator.p2p!.requestVerify(peerId, req.body, 10_000);
+          const response = await facilitator.p2p!.requestVerify(peerId, forwardBody, 10_000);
           if (response.status === 200) {
             return response.body === true ? { kind: "true" } : { kind: "false" };
           }
@@ -145,9 +152,12 @@ export function createGatewayAdapter(
         else if (v.kind === "error" && !firstError) firstError = { status: v.status, body: v.body };
       }
 
-      if (trueCount >= verifyQuorum) return res.status(200).json(true);
-      if (sawFalse) return res.status(200).json(false);
-      if (firstError) return res.status(firstError.status).json(firstError.body);
+      if (trueCount >= verifyQuorum) return res.status(200).json({ isValid: true, invalidReason: null });
+      if (sawFalse) return res.status(200).json({ isValid: false, invalidReason: null });
+      if (firstError) {
+        const reason = typeof firstError.body?.error === "string" ? firstError.body.error : undefined;
+        return res.status(400).json({ isValid: false, invalidReason: reason ?? "Verification error" });
+      }
       return res.status(503).json({ error: "Verification unavailable" });
     } catch (err: any) {
       return res.status(500).json({ error: "Internal error", message: err?.message });
@@ -162,18 +172,34 @@ export function createGatewayAdapter(
     }
     const peerId = pickRandom(peers);
     try {
+      const inbound = req.body as any;
+      const forwardBody = inbound?.paymentPayload && inbound?.paymentRequirements
+        ? inbound
+        : inbound?.paymentHeader && inbound?.paymentRequirements
+          ? { paymentPayload: { header: inbound.paymentHeader }, paymentRequirements: inbound.paymentRequirements }
+          : inbound;
       try {
-        const response = await facilitator.p2p!.requestSettle(peerId, req.body, 30_000);
-        return res.status(response.status).json(response.body);
+        const response = await facilitator.p2p!.requestSettle(peerId, forwardBody, 30_000);
+        if (response.status === 200) {
+          const txHash = (response.body as any)?.txHash ?? null;
+          return res.status(200).json({ success: true, error: null, txHash, networkId: null });
+        }
+        const errMsg = (response.body as any)?.error ?? "Settle error";
+        return res.status(400).json({ success: false, error: errMsg, txHash: null, networkId: null });
       } catch {}
       const maddrs = peerIdToMultiaddrs.get(peerId) ?? [];
       for (const m of maddrs) {
         try {
-          const response = await facilitator.p2p!.requestSettleByMultiaddr(m, req.body, 30_000);
-          return res.status(response.status).json(response.body);
+          const response = await facilitator.p2p!.requestSettleByMultiaddr(m, forwardBody, 30_000);
+          if (response.status === 200) {
+            const txHash = (response.body as any)?.txHash ?? null;
+            return res.status(200).json({ success: true, error: null, txHash, networkId: null });
+          }
+          const errMsg = (response.body as any)?.error ?? "Settle error";
+          return res.status(400).json({ success: false, error: errMsg, txHash: null, networkId: null });
         } catch {}
       }
-      return res.status(503).json({ error: "Settle unavailable" });
+      return res.status(503).json({ success: false, error: "Settle unavailable", txHash: null, networkId: null });
     } catch (err: any) {
       return res.status(502).json({ error: "Settle failed", message: err?.message });
     }
