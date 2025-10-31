@@ -78,7 +78,7 @@ export class P2PManager {
     this.node = await createLibp2p({
       transports,
       streamMuxers: [mplex()],
-      connectionEncryption: [noise()],
+      connectionEncrypters: [noise()],
       services,
       peerDiscovery,
       addresses: {
