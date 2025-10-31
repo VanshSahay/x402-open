@@ -50,6 +50,8 @@ export class Facilitator {
     requestSettle: (peerId: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
     requestVerifyByMultiaddr: (multiaddr: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
     requestSettleByMultiaddr: (multiaddr: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
+    requestHealth: (peerId: string) => Promise<HandlerResponse>;
+    requestHealthByMultiaddr: (multiaddr: string) => Promise<HandlerResponse>;
     onAnnouncement: (handler: (peerId: string, kinds: SupportedPaymentKind[]) => void) => () => void;
     getPeerId: () => string | undefined;
     getMultiaddrs: () => string[];
@@ -85,6 +87,14 @@ export class Facilitator {
         },
         requestSettleByMultiaddr: async (multiaddr, body, timeoutMs) => {
           const res = await manager.requestSettleByMultiaddr(multiaddr, { paymentPayload: (body as any)?.paymentPayload, paymentRequirements: (body as any)?.paymentRequirements }, timeoutMs);
+          return { status: res.status, body: res.body };
+        },
+        requestHealth: async (peerId) => {
+          const res = await manager.requestHealth(peerId);
+          return { status: res.status, body: res.body };
+        },
+        requestHealthByMultiaddr: async (multiaddr) => {
+          const res = await manager.requestHealthByMultiaddr(multiaddr);
           return { status: res.status, body: res.body };
         },
         onAnnouncement: (handler) => manager.onAnnouncement(handler),

@@ -157,6 +157,14 @@ export class P2PManager {
     return this.sendRequestByMultiaddr(multiaddr, "/x402/1.0/settle", { body });
   }
 
+  async requestHealth(peerId: string): Promise<P2PResponse> {
+    return this.sendRequest(peerId, "/x402/1.0/health", {});
+  }
+
+  async requestHealthByMultiaddr(multiaddr: string): Promise<P2PResponse> {
+    return this.sendRequestByMultiaddr(multiaddr, "/x402/1.0/health", {});
+  }
+
   private wrapHandler(base: { method: "GET" | "POST"; path: P2PRequest["path"] }) {
     return async ({ stream }: any) => {
       const text = await this.readAll(stream);
