@@ -149,6 +149,14 @@ export class P2PManager {
     return this.sendRequest(peerId, "/x402/1.0/settle", { body });
   }
 
+  async requestVerifyByMultiaddr(multiaddr: string, body: unknown, timeoutMs = 10_000): Promise<P2PResponse> {
+    return this.sendRequestByMultiaddr(multiaddr, "/x402/1.0/verify", { body });
+  }
+
+  async requestSettleByMultiaddr(multiaddr: string, body: unknown, timeoutMs = 30_000): Promise<P2PResponse> {
+    return this.sendRequestByMultiaddr(multiaddr, "/x402/1.0/settle", { body });
+  }
+
   private wrapHandler(base: { method: "GET" | "POST"; path: P2PRequest["path"] }) {
     return async ({ stream }: any) => {
       const text = await this.readAll(stream);
@@ -162,6 +170,16 @@ export class P2PManager {
   private async sendRequest(peerId: string, protocol: string, payload: unknown): Promise<P2PResponse> {
     if (!this.node) throw new Error("P2P not started");
     const conn = await this.node.dial(peerId);
+    const { stream } = await conn.newStream(protocol);
+    const writer = stream.sink ? stream : await this.asSink(stream);
+    await writer.sink(this.toIterable(JSON.stringify(payload)));
+    const text = await this.readAll(stream);
+    return JSON.parse(text || "{}") as P2PResponse;
+  }
+
+  private async sendRequestByMultiaddr(multiaddr: string, protocol: string, payload: unknown): Promise<P2PResponse> {
+    if (!this.node) throw new Error("P2P not started");
+    const conn = await this.node.dial(multiaddr);
     const { stream } = await conn.newStream(protocol);
     const writer = stream.sink ? stream : await this.asSink(stream);
     await writer.sink(this.toIterable(JSON.stringify(payload)));

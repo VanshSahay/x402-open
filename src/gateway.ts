@@ -7,6 +7,7 @@ export type GatewayOptions = {
   staticPeers?: string[];
   verifyQuorum?: number; // number of successful verifies required to accept (default 1)
   peerTtlMs?: number; // how long to keep a peer announcement as fresh (default 2 minutes)
+  peerMultiaddrs?: string[]; // optional known multiaddrs for direct dialing (maps by trailing /p2p/<peerId>)
 };
 
 type PeerRecord = {
@@ -31,6 +32,7 @@ export function createGatewayAdapter(
   const peerTtlMs = options.peerTtlMs ?? 2 * 60_000;
 
   const peerIdToRecord = new Map<string, PeerRecord>();
+  const peerIdToMultiaddrs = new Map<string, string[]>();
 
   // Seed static peers (no known kinds yet)
   for (const peerId of options.staticPeers ?? []) {
@@ -47,6 +49,17 @@ export function createGatewayAdapter(
       peerIdToRecord.set(peerId, { peerId, kinds, lastSeenMs: now });
     }
   });
+
+  // Seed known multiaddrs
+  for (const maddr of options.peerMultiaddrs ?? []) {
+    const match = /\/p2p\/([^/]+)$/i.exec(maddr);
+    const pid = match?.[1];
+    if (pid) {
+      const list = peerIdToMultiaddrs.get(pid) ?? [];
+      list.push(maddr);
+      peerIdToMultiaddrs.set(pid, list);
+    }
+  }
 
   function normalizePath(path: string): string {
     const p = basePath + path;
@@ -103,9 +116,20 @@ export function createGatewayAdapter(
             return response.body === true ? { kind: "true" } : { kind: "false" };
           }
           return { kind: "error", status: response.status, body: response.body };
-        } catch (e) {
-          return { kind: "fail" };
+        } catch {}
+
+        // Fallback: try direct multiaddr if known
+        const maddrs = peerIdToMultiaddrs.get(peerId) ?? [];
+        for (const m of maddrs) {
+          try {
+            const response = await facilitator.p2p!.requestVerifyByMultiaddr(m, req.body, 10_000);
+            if (response.status === 200) {
+              return response.body === true ? { kind: "true" } : { kind: "false" };
+            }
+            return { kind: "error", status: response.status, body: response.body };
+          } catch {}
         }
+        return { kind: "fail" };
       });
 
       const results = await Promise.allSettled(attempts);
@@ -138,8 +162,18 @@ export function createGatewayAdapter(
     }
     const peerId = pickRandom(peers);
     try {
-      const response = await facilitator.p2p!.requestSettle(peerId, req.body, 30_000);
-      return res.status(response.status).json(response.body);
+      try {
+        const response = await facilitator.p2p!.requestSettle(peerId, req.body, 30_000);
+        return res.status(response.status).json(response.body);
+      } catch {}
+      const maddrs = peerIdToMultiaddrs.get(peerId) ?? [];
+      for (const m of maddrs) {
+        try {
+          const response = await facilitator.p2p!.requestSettleByMultiaddr(m, req.body, 30_000);
+          return res.status(response.status).json(response.body);
+        } catch {}
+      }
+      return res.status(503).json({ error: "Settle unavailable" });
     } catch (err: any) {
       return res.status(502).json({ error: "Settle failed", message: err?.message });
     }
