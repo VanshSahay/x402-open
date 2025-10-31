@@ -95,7 +95,7 @@ export class P2PManager {
     this.node.handle("/x402/1.0/settle", this.wrapHandler({ method: "POST", path: "/settle" }));
     this.node.handle("/x402/1.0/health", async ({ stream }: any) => {
       const kinds = await this.getSupportedKinds();
-      const payload = JSON.stringify({ ok: true, kinds });
+      const payload = JSON.stringify({ status: 200, body: { ok: true, kinds } });
       await this.writeAll(stream, payload);
     });
 
