@@ -90,29 +90,41 @@ export function createGatewayAdapter(
     } catch {}
 
     try {
-      const attempts = candidatePeers.map(async (peerId) => {
+      type Attempt =
+        | { kind: "true" }
+        | { kind: "false" }
+        | { kind: "error"; status: number; body: any }
+        | { kind: "fail" };
+
+      const attempts = candidatePeers.map(async (peerId): Promise<Attempt> => {
         try {
           const response = await facilitator.p2p!.requestVerify(peerId, req.body, 10_000);
-          if (response.status === 200) return { ok: true, body: response.body };
-        } catch {}
-        return { ok: false as const };
+          if (response.status === 200) {
+            return response.body === true ? { kind: "true" } : { kind: "false" };
+          }
+          return { kind: "error", status: response.status, body: response.body };
+        } catch (e) {
+          return { kind: "fail" };
+        }
       });
 
-      let successes = 0;
-      let successfulBody: any = undefined;
       const results = await Promise.allSettled(attempts);
+      let trueCount = 0;
+      let sawFalse = false;
+      let firstError: { status: number; body: any } | undefined;
+
       for (const r of results) {
-        if (r.status === "fulfilled" && (r.value as any)?.ok) {
-          successes += 1;
-          successfulBody = (r.value as any).body;
-        }
-        if (successes >= verifyQuorum) break;
+        if (r.status !== "fulfilled") continue;
+        const v = r.value;
+        if (v.kind === "true") trueCount += 1;
+        else if (v.kind === "false") sawFalse = true;
+        else if (v.kind === "error" && !firstError) firstError = { status: v.status, body: v.body };
       }
 
-      if (successes >= verifyQuorum) {
-        return res.status(200).json(successfulBody);
-      }
-      return res.status(400).json({ error: "Verification failed quorum" });
+      if (trueCount >= verifyQuorum) return res.status(200).json(true);
+      if (sawFalse) return res.status(200).json(false);
+      if (firstError) return res.status(firstError.status).json(firstError.body);
+      return res.status(503).json({ error: "Verification unavailable" });
     } catch (err: any) {
       return res.status(500).json({ error: "Internal error", message: err?.message });
     }
