@@ -15,8 +15,8 @@ import {
 } from "x402/types";
 import { verify, settle } from "x402/facilitator";
 import type { Chain } from "viem/chains";
-import type { DecentralizedConfig } from "./p2p";
-import { P2PManager } from "./p2p";
+import type { DecentralizedConfig } from "./p2p.js";
+import { P2PManager } from "./p2p.js";
 
 export type FacilitatorConfig = {
   evmPrivateKey?: `0x${string}`;
