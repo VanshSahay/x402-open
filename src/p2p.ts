@@ -182,7 +182,9 @@ export class P2PManager {
   private async sendRequest(peerId: string, protocol: string, payload: unknown): Promise<P2PResponse> {
     if (!this.node) throw new Error("P2P not started");
     const conn = await this.node.dial(peerId);
-    const { stream } = await conn.newStream(protocol);
+    const opened = await conn.newStream(protocol);
+    const stream = (opened as any)?.stream ?? opened;
+    if (!stream) throw new Error("Failed to open stream");
     const writer = stream.sink ? stream : await this.asSink(stream);
     await writer.sink(this.toIterable(JSON.stringify(payload)));
     const text = await this.readAll(stream);
@@ -193,7 +195,9 @@ export class P2PManager {
     if (!this.node) throw new Error("P2P not started");
     const { multiaddr } = await import("@multiformats/multiaddr");
     const conn = await this.node.dial(multiaddr(multiaddrStr));
-    const { stream } = await conn.newStream(protocol);
+    const opened = await conn.newStream(protocol);
+    const stream = (opened as any)?.stream ?? opened;
+    if (!stream) throw new Error("Failed to open stream");
     const writer = stream.sink ? stream : await this.asSink(stream);
     await writer.sink(this.toIterable(JSON.stringify(payload)));
     const text = await this.readAll(stream);
