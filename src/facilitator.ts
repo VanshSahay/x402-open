@@ -48,6 +48,9 @@ export class Facilitator {
     stop: () => Promise<void>;
     requestVerify: (peerId: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
     requestSettle: (peerId: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
+    onAnnouncement: (handler: (peerId: string, kinds: SupportedPaymentKind[]) => void) => () => void;
+    getPeerId: () => string | undefined;
+    getMultiaddrs: () => string[];
   };
 
   constructor(config: FacilitatorConfig) {
@@ -74,6 +77,9 @@ export class Facilitator {
           const res = await manager.requestSettle(peerId, { paymentPayload: (body as any)?.paymentPayload, paymentRequirements: (body as any)?.paymentRequirements }, timeoutMs);
           return { status: res.status, body: res.body };
         },
+        onAnnouncement: (handler) => manager.onAnnouncement(handler),
+        getPeerId: () => manager.getPeerId(),
+        getMultiaddrs: () => manager.getMultiaddrs(),
       };
     }
   }

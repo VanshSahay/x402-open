@@ -113,6 +113,45 @@ Provide `svmPrivateKey` (and optionally `svmRpcUrl`) to enable SVM support. Curr
 
 See `MULTINODE.md` for a local multi-node example.
 
+## Gateway (single RPC URL across many nodes)
+
+Expose one HTTP URL that fans-out to multiple decentralized facilitators under the hood.
+
+```ts
+import express from "express";
+import { Facilitator, createGatewayAdapter } from "x402-open";
+
+const app = express();
+app.use(express.json());
+
+// Create a facilitator purely to use its libp2p client helpers
+const gatewayFacilitator = new Facilitator({
+  decentralized: { enabled: true },
+});
+
+// Optionally seed known peerIds; discovery improves as peers announce
+createGatewayAdapter(gatewayFacilitator, app, {
+  basePath: "/facilitator",            // optional base path
+  staticPeers: ["12D3KooW...", "12D3KooX..."],
+  verifyQuorum: 1,                      // accept first success (or increase for M-of-N)
+});
+
+(async () => {
+  await gatewayFacilitator.p2p?.start();
+  app.listen(8080, () => console.log("Gateway on http://localhost:8080"));
+})();
+```
+
+Mounted endpoints (at `basePath` if provided):
+
+- POST `/rpc/verify` → forwards to multiple peers concurrently; returns on first success (or quorum)
+- POST `/rpc/settle` → forwards to one randomly selected peer
+
+Notes:
+
+- Install libp2p deps as shown in the Decentralized mode section.
+- Peers publish capabilities on pubsub topic `x402/1.0/announcements`; the gateway tracks these to discover peers.
+
 ## License
 
 ISC

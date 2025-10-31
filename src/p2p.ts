@@ -29,6 +29,7 @@ export class P2PManager {
   private readonly handleRequest: Handler;
   private readonly getSupportedKinds: SupportedKindsProvider;
   private node: any | undefined;
+  private readonly announcementHandlers: Array<(peerId: string, kinds: SupportedPaymentKind[]) => void> = [];
 
   constructor(conf: DecentralizedConfig, handleRequest: Handler, getSupportedKinds: SupportedKindsProvider) {
     this.conf = conf;
@@ -96,6 +97,34 @@ export class P2PManager {
     };
     announce().catch(() => undefined);
     setInterval(() => announce().catch(() => undefined), 60_000);
+
+    // Subscribe to announcements from other peers
+    try {
+      await this.node.services.pubsub.subscribe("x402/1.0/announcements");
+      // Best-effort event listener; libp2p/gossipsub event shape varies by version
+      this.node.services.pubsub.addEventListener?.("message", async (evt: any) => {
+        try {
+          const detail = evt?.detail ?? evt; // some versions place data directly
+          const topic = detail?.topic ?? detail?.msg?.topic;
+          if (topic !== "x402/1.0/announcements") return;
+          const from = detail?.from ?? detail?.msg?.from;
+          const dataBuf = detail?.data ?? detail?.msg?.data;
+          if (!dataBuf) return;
+          const text = typeof dataBuf === "string" ? dataBuf : new TextDecoder().decode(dataBuf);
+          const parsed = JSON.parse(text || "{}");
+          const kinds = Array.isArray(parsed?.kinds) ? parsed.kinds : [];
+          const peerId = typeof from?.toString === "function" ? from.toString() : String(from ?? "");
+          if (!peerId || kinds.length === 0) return;
+          for (const handler of this.announcementHandlers) {
+            try {
+              handler(peerId, kinds);
+            } catch {}
+          }
+        } catch {}
+      });
+    } catch {
+      // ignore subscription errors; announcements are optional
+    }
   }
 
   async stop(): Promise<void> {
@@ -156,6 +185,36 @@ export class P2PManager {
     if (stream.sink) return stream;
     if (stream.writer && stream.reader) return stream;
     return stream; // best-effort
+  }
+
+  onAnnouncement(handler: (peerId: string, kinds: SupportedPaymentKind[]) => void): () => void {
+    this.announcementHandlers.push(handler);
+    return () => {
+      const idx = this.announcementHandlers.indexOf(handler);
+      if (idx >= 0) this.announcementHandlers.splice(idx, 1);
+    };
+  }
+
+  getPeerId(): string | undefined {
+    // toString is available on modern PeerId
+    try {
+      const pid = this.node?.peerId;
+      if (!pid) return undefined;
+      if (typeof pid.toString === "function") return pid.toString();
+      return String(pid);
+    } catch {
+      return undefined;
+    }
+  }
+
+  getMultiaddrs(): string[] {
+    try {
+      const addrs = this.node?.getMultiaddrs?.();
+      if (!addrs || !Array.isArray(addrs)) return [];
+      return addrs.map((ma: any) => (typeof ma?.toString === "function" ? ma.toString() : String(ma)));
+    } catch {
+      return [];
+    }
   }
 }
 

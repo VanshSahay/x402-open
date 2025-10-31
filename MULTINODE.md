@@ -35,6 +35,8 @@ createExpressAdapter(facilitator, app, "/facilitator");
 
 (async () => {
   await facilitator.p2p?.start();
+  console.log("Node A peerId:", facilitator.p2p?.getPeerId());
+  console.log("Node A multiaddrs:", facilitator.p2p?.getMultiaddrs());
   app.listen(4101, () => console.log("Node A HTTP on 4101"));
 })();
 ```
@@ -61,6 +63,8 @@ createExpressAdapter(facilitator, app, "/facilitator");
 
 (async () => {
   await facilitator.p2p?.start();
+  console.log("Node B peerId:", facilitator.p2p?.getPeerId());
+  console.log("Node B multiaddrs:", facilitator.p2p?.getMultiaddrs());
   app.listen(4102, () => console.log("Node B HTTP on 4102"));
 })();
 ```
@@ -68,6 +72,7 @@ createExpressAdapter(facilitator, app, "/facilitator");
 Notes:
 - With no bootstrap, local nodes may not discover each other automatically unless you dial directly (peerId known) or you run a shared bootstrap peer.
 - For quick testing of direct RPC, once both nodes start, log `peerId` from the p2p node if you expose it, then from A call `facilitator.p2p?.requestVerify("<peerIdB>", { paymentPayload, paymentRequirements })`.
+ - For quick testing of direct RPC, once both nodes start, copy `peerId` lines from logs. Use those as `staticPeers` in a gateway (or to dial directly). If peers run on different machines/processes, also copy one WebSockets/TCP `multiaddr` per node and pass them as `bootstrapPeers` in the gateway's decentralized config so it can discover and dial.
 
 ## Optional: add a local bootstrap
 You can run an additional libp2p node as a bootstrap and add its multiaddr to `bootstrapPeers` for both nodes. Any public libp2p bootstrap can work as well.
