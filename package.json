@@ -14,6 +14,12 @@
     "./package.json": "./package.json"
   },
   "sideEffects": false,
+  "files": [
+    "dist/**/*"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "echo 'No runnable entry. Import the package in your app.'",
     "build": "tsc",
