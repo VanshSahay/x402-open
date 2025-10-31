@@ -15,12 +15,15 @@ import {
 } from "x402/types";
 import { verify, settle } from "x402/facilitator";
 import type { Chain } from "viem/chains";
+import type { DecentralizedConfig } from "./p2p";
+import { P2PManager } from "./p2p";
 
 export type FacilitatorConfig = {
   evmPrivateKey?: `0x${string}`;
   svmPrivateKey?: string;
   svmRpcUrl?: string;
   networks?: readonly Chain[];
+  decentralized?: DecentralizedConfig;
 };
 
 export type HandlerRequest = {
@@ -40,6 +43,12 @@ export class Facilitator {
   private readonly svmRpcUrl?: string;
   private readonly networks: readonly Chain[];
   private readonly x402Config: X402Config | undefined;
+  public readonly p2p?: {
+    start: () => Promise<void>;
+    stop: () => Promise<void>;
+    requestVerify: (peerId: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
+    requestSettle: (peerId: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
+  };
 
   constructor(config: FacilitatorConfig) {
     this.evmPrivateKey = config.evmPrivateKey;
@@ -47,6 +56,26 @@ export class Facilitator {
     this.svmRpcUrl = config.svmRpcUrl;
     this.networks = config.networks ?? [];
     this.x402Config = this.svmRpcUrl ? { svmConfig: { rpcUrl: this.svmRpcUrl } } : undefined;
+
+    if (config.decentralized?.enabled) {
+      const manager = new P2PManager(
+        config.decentralized,
+        async (req) => this.handleRequest(req),
+        async () => this.getSupportedKinds()
+      );
+      this.p2p = {
+        start: () => manager.start(),
+        stop: () => manager.stop(),
+        requestVerify: async (peerId, body, timeoutMs) => {
+          const res = await manager.requestVerify(peerId, { paymentPayload: (body as any)?.paymentPayload, paymentRequirements: (body as any)?.paymentRequirements }, timeoutMs);
+          return { status: res.status, body: res.body };
+        },
+        requestSettle: async (peerId, body, timeoutMs) => {
+          const res = await manager.requestSettle(peerId, { paymentPayload: (body as any)?.paymentPayload, paymentRequirements: (body as any)?.paymentRequirements }, timeoutMs);
+          return { status: res.status, body: res.body };
+        },
+      };
+    }
   }
 
   async handleRequest(req: HandlerRequest): Promise<HandlerResponse> {
