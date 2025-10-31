@@ -29,6 +29,12 @@ app.use(express.json());
 const facilitator = new Facilitator({
   evmPrivateKey: process.env.EVM_PRIVATE_KEY as `0x${string}`,
   networks: [baseSepolia],
+  // Optional: enable decentralized mode (libp2p)
+  decentralized: {
+    enabled: false,
+    // bootstrapPeers: ["/dns4/bootstrap.x402.dev/tcp/443/wss/p2p/12D3K..."],
+    // relay: { enabled: true },
+  },
 });
 
 // Mounts GET /facilitator/supported, POST /facilitator/verify, POST /facilitator/settle
@@ -63,6 +69,7 @@ Config:
 - `svmPrivateKey?: string`: Private key for SVM settlements (optional)
 - `svmRpcUrl?: string`: Custom SVM RPC URL (optional)
 - `networks?: readonly Chain[]`: EVM chains (from `viem/chains`) to advertise in `/supported`
+ - `decentralized?: { enabled: boolean; bootstrapPeers?: string[]; relay?: { enabled?: boolean }; announceAddrs?: string[]; dataDir?: string; allowlist?: string[] }`
 
 Methods:
 - `handleRequest({ method, path, body? })` → `{ status, body }`
@@ -71,6 +78,28 @@ Methods:
 ### `createExpressAdapter(facilitator, routerOrApp, basePath = "")`
 
 - Mounts the three endpoints listed above on an Express `Router` or `App` at `basePath`.
+
+### Decentralized mode (libp2p)
+
+When `decentralized.enabled` is `true`, a libp2p node can be started and used via:
+
+```ts
+await facilitator.p2p?.start();
+
+// Optional client helpers if you know a peerId
+const verifyRes = await facilitator.p2p?.requestVerify("<peerId>", {
+  paymentPayload,
+  paymentRequirements,
+});
+
+await facilitator.p2p?.stop();
+```
+
+This package uses dynamic imports and ships without libp2p deps by default. To use decentralized mode, install:
+
+```bash
+pnpm add libp2p @chainsafe/libp2p-noise @libp2p/mplex @chainsafe/libp2p-gossipsub @libp2p/kad-dht @libp2p/tcp @libp2p/websockets @libp2p/identify @libp2p/circuit-relay-v2 @libp2p/bootstrap
+```
 
 ## SVM (optional)
 
@@ -81,6 +110,8 @@ Provide `svmPrivateKey` (and optionally `svmRpcUrl`) to enable SVM support. Curr
 - This package depends on `x402` under the hood for verification and settlement logic.
 - For EVM support in `/supported`, pass the target `viem` chains via the `networks` array.
 - On error, endpoints return `400` with `{ error: string }` or `500` for unexpected failures.
+
+See `MULTINODE.md` for a local multi-node example.
 
 ## License
 
