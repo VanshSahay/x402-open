@@ -58,16 +58,20 @@ export class P2PManager {
 
     const peerDiscovery = this.conf.bootstrapPeers?.length ? [bootstrap({ list: this.conf.bootstrapPeers })] : [];
 
+    const services: any = {
+      identify: identify(),
+      pubsub: gossipsub({ allowPublishToZeroPeers: true }),
+      dht: kadDHT({ clientMode: false }),
+    };
+    if (this.conf.relay?.enabled) {
+      services.relay = circuitRelayServer({ advertise: true });
+    }
+
     this.node = await createLibp2p({
       transports,
       streamMuxers: [mplex()],
       connectionEncryption: [noise()],
-      services: {
-        identify: identify(),
-        pubsub: gossipsub({ allowPublishToZeroPeers: true }),
-        dht: kadDHT({ clientMode: false }),
-        relay: this.conf.relay?.enabled ? circuitRelayServer({ advertise: true }) : undefined,
-      },
+      services,
       peerDiscovery,
       addresses: { announce: this.conf.announceAddrs ?? [] },
     });
