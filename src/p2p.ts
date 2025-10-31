@@ -42,7 +42,7 @@ export class P2PManager {
     if (!this.conf.enabled || this.node) return;
 
     // Dynamic imports (typed as any to avoid compile-time dependency)
-    const [{ createLibp2p }, { noise }, { mplex }, { gossipsub }, { kadDHT }, { tcp }, { webSockets }, { identify }, { circuitRelayTransport, circuitRelayServer }, { bootstrap }, { ping }]: any = await Promise.all([
+    const [{ createLibp2p }, { noise }, { mplex }, { gossipsub }, { kadDHT }, { tcp }, { webSockets, filters }, { identify }, { circuitRelayTransport, circuitRelayServer }, { bootstrap }, { ping }]: any = await Promise.all([
       import("libp2p"),
       import("@chainsafe/libp2p-noise"),
       import("@libp2p/mplex"),
@@ -56,7 +56,11 @@ export class P2PManager {
       import("@libp2p/ping"),
     ]);
 
-    const transports = [tcp(), webSockets()];
+    const transports = [
+      tcp(),
+      // Allow dialing ws to localhost/ip addresses in dev
+      webSockets({ filter: filters?.all ?? (() => true) }),
+    ];
     if (this.conf.relay?.enabled) transports.push(circuitRelayTransport());
 
     const peerDiscovery = this.conf.bootstrapPeers?.length ? [bootstrap({ list: this.conf.bootstrapPeers })] : [];

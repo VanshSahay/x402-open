@@ -18,6 +18,7 @@ declare module "@libp2p/tcp" {
 }
 declare module "@libp2p/websockets" {
   export const webSockets: any;
+  export const filters: any;
 }
 declare module "@libp2p/identify" {
   export const identify: any;
