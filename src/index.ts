@@ -1,2 +1,2 @@
-export { Facilitator } from "./facilitator";
-export { createExpressAdapter } from "./expressAdapter";
+export { Facilitator } from "./facilitator.js";
+export { createExpressAdapter } from "./expressAdapter.js";
