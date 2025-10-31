@@ -5,6 +5,7 @@ export type DecentralizedConfig = {
   bootstrapPeers?: string[];
   relay?: { enabled?: boolean };
   announceAddrs?: string[];
+  listenAddrs?: string[];
   dataDir?: string;
   allowlist?: string[];
 };
@@ -76,7 +77,13 @@ export class P2PManager {
       connectionEncryption: [noise()],
       services,
       peerDiscovery,
-      addresses: { announce: this.conf.announceAddrs ?? [] },
+      addresses: {
+        listen: this.conf.listenAddrs ?? [
+          "/ip4/127.0.0.1/tcp/0",
+          "/ip4/127.0.0.1/tcp/0/ws",
+        ],
+        announce: this.conf.announceAddrs ?? [],
+      },
     });
 
     // Direct RPC handlers
