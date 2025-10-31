@@ -33,3 +33,7 @@ declare module "@libp2p/ping" {
   export const ping: any;
 }
 
+declare module "@multiformats/multiaddr" {
+  export const multiaddr: any;
+}
+

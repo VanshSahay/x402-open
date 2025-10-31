@@ -185,9 +185,10 @@ export class P2PManager {
     return JSON.parse(text || "{}") as P2PResponse;
   }
 
-  private async sendRequestByMultiaddr(multiaddr: string, protocol: string, payload: unknown): Promise<P2PResponse> {
+  private async sendRequestByMultiaddr(multiaddrStr: string, protocol: string, payload: unknown): Promise<P2PResponse> {
     if (!this.node) throw new Error("P2P not started");
-    const conn = await this.node.dial(multiaddr);
+    const { multiaddr } = await import("@multiformats/multiaddr");
+    const conn = await this.node.dial(multiaddr(multiaddrStr));
     const { stream } = await conn.newStream(protocol);
     const writer = stream.sink ? stream : await this.asSink(stream);
     await writer.sink(this.toIterable(JSON.stringify(payload)));
