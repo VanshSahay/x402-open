@@ -29,4 +29,7 @@ declare module "@libp2p/circuit-relay-v2" {
 declare module "@libp2p/bootstrap" {
   export const bootstrap: any;
 }
+declare module "@libp2p/ping" {
+  export const ping: any;
+}
 

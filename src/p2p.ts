@@ -40,7 +40,7 @@ export class P2PManager {
     if (!this.conf.enabled || this.node) return;
 
     // Dynamic imports (typed as any to avoid compile-time dependency)
-    const [{ createLibp2p }, { noise }, { mplex }, { gossipsub }, { kadDHT }, { tcp }, { webSockets }, { identify }, { circuitRelayTransport, circuitRelayServer }, { bootstrap }]: any = await Promise.all([
+    const [{ createLibp2p }, { noise }, { mplex }, { gossipsub }, { kadDHT }, { tcp }, { webSockets }, { identify }, { circuitRelayTransport, circuitRelayServer }, { bootstrap }, { ping }]: any = await Promise.all([
       import("libp2p"),
       import("@chainsafe/libp2p-noise"),
       import("@libp2p/mplex"),
@@ -51,6 +51,7 @@ export class P2PManager {
       import("@libp2p/identify"),
       import("@libp2p/circuit-relay-v2"),
       import("@libp2p/bootstrap"),
+      import("@libp2p/ping"),
     ]);
 
     const transports = [tcp(), webSockets()];
@@ -62,6 +63,7 @@ export class P2PManager {
       identify: identify(),
       pubsub: gossipsub({ allowPublishToZeroPeers: true }),
       dht: kadDHT({ clientMode: false }),
+      ping: ping(),
     };
     if (this.conf.relay?.enabled) {
       services.relay = circuitRelayServer({ advertise: true });

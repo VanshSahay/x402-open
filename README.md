@@ -98,7 +98,7 @@ await facilitator.p2p?.stop();
 This package uses dynamic imports and ships without libp2p deps by default. To use decentralized mode, install:
 
 ```bash
-pnpm add libp2p @chainsafe/libp2p-noise @libp2p/mplex @chainsafe/libp2p-gossipsub @libp2p/kad-dht @libp2p/tcp @libp2p/websockets @libp2p/identify @libp2p/circuit-relay-v2 @libp2p/bootstrap
+pnpm add libp2p @chainsafe/libp2p-noise @libp2p/mplex @chainsafe/libp2p-gossipsub @libp2p/kad-dht @libp2p/tcp @libp2p/websockets @libp2p/identify @libp2p/circuit-relay-v2 @libp2p/bootstrap @libp2p/ping
 ```
 
 ## SVM (optional)
