@@ -1,11 +1,21 @@
 {
-  "name": "x402-open",
+  "name": "@x402-open/core",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/index.js",
   "type": "module",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
   "scripts": {
-    "dev": "node --import 'data:text/javascript,import { register } from \"node:module\"; import { pathToFileURL } from \"node:url\"; register(\"ts-node/esm\", pathToFileURL(\"./\"));' src/index.ts",
+    "dev": "echo 'No runnable entry. Import the package in your app.'",
     "build": "tsc",
     "start": "node dist/index.js"
   },
@@ -24,10 +34,12 @@
     "@solana/web3.js": "^1.95.3",
     "bs58": "^6.0.0",
     "dotenv": "^16.4.5",
-    "express": "^4.21.1",
     "viem": "^2.21.34",
     "@scure/base": "^1.1.9",
     "zod": "^3.23.8",
     "x402": "^0.7.0"
+  },
+  "peerDependencies": {
+    "express": ">=4"
   }
 }
