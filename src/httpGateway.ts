@@ -90,12 +90,9 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
         }
       }
 
-      if (typeof trueCount === "number" && trueCount >= verifyQuorum) return res.status(200).json({ isValid: true, invalidReason: null });
-      if (sawFalse) return res.status(200).json({ isValid: false, invalidReason: null });
-      if (firstError) {
-        const reason = typeof firstError.body?.error === "string" ? firstError.body.error : undefined;
-        return res.status(200).json({ isValid: false, invalidReason: reason ?? "Verification error" });
-      }
+      if (typeof trueCount === "number" && trueCount >= verifyQuorum) return res.status(200).json(true);
+      if (sawFalse) return res.status(200).json(false);
+      if (firstError) return res.status(400).json(firstError.body);
       return res.status(503).json({ error: "Verification unavailable" });
     } catch (err: any) {
       return res.status(500).json({ error: "Internal error", message: err?.message });
@@ -119,12 +116,8 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
       try {
         if (options.debug) console.log("[http-gateway] settling via", url);
         const response = await postJson(url, forwardBody, settleTimeout);
-        if (response.status === 200) {
-          const txHash = (response.body as any)?.txHash ?? null;
-          return res.status(200).json({ success: true, error: null, txHash, networkId: null });
-        }
-        const errMsg = (response.body as any)?.error ?? "Settle error";
-        if (options.debug) console.log("[http-gateway] settle non-200 from", url, response.status, errMsg);
+        if (response.status === 200) return res.status(200).json(response.body);
+        if (options.debug) console.log("[http-gateway] settle non-200 from", url, response.status, response.body);
         // try next peer
       } catch (err: any) {
         if (options.debug) console.log("[http-gateway] settle network error from", url, err?.message);
