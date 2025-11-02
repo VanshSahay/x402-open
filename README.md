@@ -152,6 +152,33 @@ Notes:
 - Install libp2p deps as shown in the Decentralized mode section.
 - Peers publish capabilities on pubsub topic `x402/1.0/announcements`; the gateway tracks these to discover peers.
 
+### HTTP-only gateway (no libp2p)
+
+If you prefer to route via HTTP without libp2p, use `createHttpGatewayAdapter` and list node URLs (where their Express adapter is mounted).
+
+```ts
+import express from "express";
+import { createHttpGatewayAdapter } from "x402-open";
+
+const app = express();
+app.use(express.json());
+
+createHttpGatewayAdapter(app, {
+  basePath: "/facilitator",
+  httpPeers: [
+    "http://localhost:4101/facilitator",
+    "http://localhost:4102/facilitator",
+  ],
+  verifyQuorum: 1,
+});
+
+app.listen(8080, () => console.log("HTTP Gateway on http://localhost:8080"));
+```
+
+Endpoints (same as decentralized gateway):
+- POST `/facilitator/rpc/verify` → returns `{ isValid, invalidReason }`
+- POST `/facilitator/rpc/settle` → returns `{ success, error, txHash, networkId }`
+
 ## License
 
 ISC

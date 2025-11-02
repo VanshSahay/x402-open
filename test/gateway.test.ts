@@ -50,13 +50,13 @@ describe("gateway /rpc/verify", () => {
     expect(res.body).toEqual({ isValid: false, invalidReason: null });
   });
 
-  it("returns first peer error when none succeed", async () => {
+  it("returns 200 isValid:false with invalidReason when none succeed", async () => {
     const p2p = {
       requestVerify: async () => ({ status: 400, body: { error: "bad" } }),
     };
     const app = makeApp(p2p);
     const res = await request(app).post("/facilitator/rpc/verify").send({ paymentRequirements: { network: "base-sepolia" } });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
     expect(res.body).toEqual({ isValid: false, invalidReason: "bad" });
   });
 

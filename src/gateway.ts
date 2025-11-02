@@ -156,7 +156,7 @@ export function createGatewayAdapter(
       if (sawFalse) return res.status(200).json({ isValid: false, invalidReason: null });
       if (firstError) {
         const reason = typeof firstError.body?.error === "string" ? firstError.body.error : undefined;
-        return res.status(400).json({ isValid: false, invalidReason: reason ?? "Verification error" });
+        return res.status(200).json({ isValid: false, invalidReason: reason ?? "Verification error" });
       }
       return res.status(503).json({ error: "Verification unavailable" });
     } catch (err: any) {
@@ -196,7 +196,7 @@ export function createGatewayAdapter(
             return res.status(200).json({ success: true, error: null, txHash, networkId: null });
           }
           const errMsg = (response.body as any)?.error ?? "Settle error";
-          return res.status(400).json({ success: false, error: errMsg, txHash: null, networkId: null });
+          return res.status(200).json({ success: false, error: errMsg, txHash: null, networkId: null });
         } catch {}
       }
       return res.status(503).json({ success: false, error: "Settle unavailable", txHash: null, networkId: null });
