@@ -6,6 +6,7 @@ export type HttpGatewayOptions = {
   verifyQuorum?: number; // default 1
   timeoutMs?: number; // default 10s verify, 30s settle
   debug?: boolean;
+  verifyMode?: "fanout" | "single"; // default fanout
 };
 
 async function postJson(url: string, body: unknown, timeoutMs: number): Promise<{ status: number; body: any }> {
@@ -42,7 +43,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
     return arr[Math.floor(Math.random() * arr.length)];
   }
 
-  // POST /rpc/verify — fan out to HTTP peers
+  // POST /rpc/verify — fan out or single-peer mode
   router.post(normalizePath("/rpc/verify"), async (req: Request, res: Response) => {
     const peers = options.httpPeers;
     if (!peers || peers.length === 0) return res.status(503).json({ error: "No peers configured" });
@@ -56,6 +57,29 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
         : inbound;
 
     try {
+      // Single-peer mode: pick one peer (with fallback) instead of fanning out
+      if (options.verifyMode === "single") {
+        const shuffled = [...peers].sort(() => Math.random() - 0.5);
+        let lastError: { status: number; body: any } | undefined;
+        for (const base of shuffled) {
+          const url = base.replace(/\/$/, "") + "/verify";
+          try {
+            if (options.debug) console.log("[http-gateway] verify via", url);
+            const response = await postJson(url, forwardBody, verifyTimeout);
+            if (response.status === 200) return res.status(200).json(response.body === true);
+            if (options.debug) console.log("[http-gateway] verify non-200 from", url, response.status, response.body);
+            lastError = { status: response.status, body: response.body };
+            // try next peer
+          } catch (e: any) {
+            if (options.debug) console.log("[http-gateway] verify network error from", url, e?.message);
+            // try next peer
+          }
+        }
+        if (lastError) return res.status(400).json(lastError.body);
+        return res.status(503).json({ error: "Verification unavailable" });
+      }
+
+      // Fan-out mode (default)
       type Attempt =
         | { kind: "true" }
         | { kind: "false" }
