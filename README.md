@@ -29,12 +29,6 @@ app.use(express.json());
 const facilitator = new Facilitator({
   evmPrivateKey: process.env.EVM_PRIVATE_KEY as `0x${string}`,
   networks: [baseSepolia],
-  // Optional: enable decentralized mode (libp2p)
-  decentralized: {
-    enabled: false,
-    // bootstrapPeers: ["/dns4/bootstrap.x402.dev/tcp/443/wss/p2p/12D3K..."],
-    // relay: { enabled: true },
-  },
 });
 
 // Mounts GET /facilitator/supported, POST /facilitator/verify, POST /facilitator/settle
@@ -79,27 +73,9 @@ Methods:
 
 - Mounts the three endpoints listed above on an Express `Router` or `App` at `basePath`.
 
-### Decentralized mode (libp2p)
+### Gateway (HTTP only)
 
-When `decentralized.enabled` is `true`, a libp2p node can be started and used via:
-
-```ts
-await facilitator.p2p?.start();
-
-// Optional client helpers if you know a peerId
-const verifyRes = await facilitator.p2p?.requestVerify("<peerId>", {
-  paymentPayload,
-  paymentRequirements,
-});
-
-await facilitator.p2p?.stop();
-```
-
-This package uses dynamic imports and ships without libp2p deps by default. To use decentralized mode, install:
-
-```bash
-pnpm add libp2p @chainsafe/libp2p-noise @libp2p/mplex @chainsafe/libp2p-gossipsub @libp2p/kad-dht @libp2p/tcp @libp2p/websockets @libp2p/identify @libp2p/circuit-relay-v2 @libp2p/bootstrap @libp2p/ping
-```
+Expose one URL that behaves like a facilitator and forwards to multiple node URLs.
 
 ## SVM (optional)
 
@@ -113,48 +89,7 @@ Provide `svmPrivateKey` (and optionally `svmRpcUrl`) to enable SVM support. Curr
 
 See `MULTINODE.md` for a local multi-node example.
 
-## Gateway (single RPC URL across many nodes)
-
-Expose one HTTP URL that fans-out to multiple decentralized facilitators under the hood.
-
-```ts
-import express from "express";
-import { Facilitator, createGatewayAdapter } from "x402-open";
-
-const app = express();
-app.use(express.json());
-
-// Create a facilitator purely to use its libp2p client helpers
-const gatewayFacilitator = new Facilitator({
-  decentralized: { enabled: true },
-});
-
-// Optionally seed known peerIds; discovery improves as peers announce
-createGatewayAdapter(gatewayFacilitator, app, {
-  basePath: "/facilitator",            // optional base path
-  staticPeers: ["12D3KooW...", "12D3KooX..."],
-  verifyQuorum: 1,                      // accept first success (or increase for M-of-N)
-});
-
-(async () => {
-  await gatewayFacilitator.p2p?.start();
-  app.listen(8080, () => console.log("Gateway on http://localhost:8080"));
-})();
-```
-
-Mounted endpoints (at `basePath` if provided):
-
-- POST `/rpc/verify` → forwards to multiple peers concurrently; returns on first success (or quorum)
-- POST `/rpc/settle` → forwards to one randomly selected peer
-
-Notes:
-
-- Install libp2p deps as shown in the Decentralized mode section.
-- Peers publish capabilities on pubsub topic `x402/1.0/announcements`; the gateway tracks these to discover peers.
-
-### HTTP-only gateway (no libp2p)
-
-If you prefer to route via HTTP without libp2p, use `createHttpGatewayAdapter` and list node URLs (where their Express adapter is mounted).
+If you prefer to route via HTTP, use `createHttpGatewayAdapter` and list node URLs (where their Express adapter is mounted).
 
 ```ts
 import express from "express";
@@ -169,15 +104,16 @@ createHttpGatewayAdapter(app, {
     "http://localhost:4101/facilitator",
     "http://localhost:4102/facilitator",
   ],
-  verifyQuorum: 1,
+  // selection: "headerHash" | "random" (default: headerHash)
 });
 
 app.listen(8080, () => console.log("HTTP Gateway on http://localhost:8080"));
 ```
 
-Endpoints (same as decentralized gateway):
-- POST `/facilitator/rpc/verify` → returns `{ isValid, invalidReason }`
-- POST `/facilitator/rpc/settle` → returns `{ success, error, txHash, networkId }`
+Mounted endpoints (at basePath):
+- GET `/supported` → aggregated kinds
+- POST `/verify` → returns boolean
+- POST `/settle` → returns node settlement response
 
 ## License
 

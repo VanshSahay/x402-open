@@ -3,11 +3,8 @@ import type { Router, Request, Response } from "express";
 export type HttpGatewayOptions = {
   basePath?: string;
   httpPeers: string[]; // e.g. ["http://localhost:4101/facilitator", "http://localhost:4102/facilitator"]
-  verifyQuorum?: number; // default 1
-  timeoutMs?: number; // default 10s verify, 30s settle
+  selection?: "random" | "headerHash"; // default headerHash
   debug?: boolean;
-  verifyMode?: "fanout" | "single"; // default fanout
-  selection?: "random" | "headerHash"; // default random
 };
 
 async function postJson(url: string, body: unknown, timeoutMs: number): Promise<{ status: number; body: any }> {
@@ -31,9 +28,8 @@ async function postJson(url: string, body: unknown, timeoutMs: number): Promise<
 
 export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOptions): void {
   const basePath = options.basePath ?? "";
-  const verifyQuorum = Math.max(1, options.verifyQuorum ?? 1);
-  const verifyTimeout = options.timeoutMs ?? 10_000;
-  const settleTimeout = Math.max(verifyTimeout, 30_000);
+  const verifyTimeout = 10_000;
+  const settleTimeout = 30_000;
 
   function normalizePath(path: string): string {
     const p = basePath + path;
@@ -50,7 +46,8 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
 
   function choosePeerOrder(peers: string[], body: any): string[] {
     if (peers.length <= 1) return peers.slice();
-    if (options.selection !== "headerHash") return [...peers].sort(() => Math.random() - 0.5);
+    const mode = options.selection ?? "headerHash";
+    if (mode !== "headerHash") return [...peers].sort(() => Math.random() - 0.5);
     const header = getHeaderFromBody(body);
     if (!header) return [...peers].sort(() => Math.random() - 0.5);
     let acc = 0;
@@ -86,7 +83,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
     return res.status(200).json({ kinds: uniq });
   });
 
-  // POST /verify — same behavior as a facilitator node
+  // POST /verify — same behavior as a facilitator node (single-peer routed)
   router.post(normalizePath("/verify"), async (req: Request, res: Response) => {
     const peers = options.httpPeers;
     if (!peers || peers.length === 0) return res.status(503).json({ error: "No peers configured" });
@@ -100,66 +97,21 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
         : inbound;
 
     try {
-      // Single-peer mode: pick one peer (with fallback) instead of fanning out
-      if (options.verifyMode === "single") {
-        const shuffled = choosePeerOrder(peers, forwardBody);
-        let lastError: { status: number; body: any } | undefined;
-        for (const base of shuffled) {
-          const url = base.replace(/\/$/, "") + "/verify";
-          try {
-            if (options.debug) console.log("[http-gateway] verify via", url);
-            const response = await postJson(url, forwardBody, verifyTimeout);
-            if (response.status === 200) return res.status(200).json(response.body === true);
-            if (options.debug) console.log("[http-gateway] verify non-200 from", url, response.status, response.body);
-            lastError = { status: response.status, body: response.body };
-            // try next peer
-          } catch (e: any) {
-            if (options.debug) console.log("[http-gateway] verify network error from", url, e?.message);
-            // try next peer
-          }
-        }
-        if (lastError) return res.status(400).json(lastError.body);
-        return res.status(503).json({ error: "Verification unavailable" });
-      }
-
-      // Fan-out mode (default)
-      type Attempt =
-        | { kind: "true" }
-        | { kind: "false" }
-        | { kind: "error"; status: number; body: any }
-        | { kind: "fail" };
-
-      const attempts = peers.map(async (base) => {
+      const shuffled = choosePeerOrder(peers, forwardBody);
+      let lastError: { status: number; body: any } | undefined;
+      for (const base of shuffled) {
+        const url = base.replace(/\/$/, "") + "/verify";
         try {
-          const url = base.replace(/\/$/, "") + "/verify";
+          if (options.debug) console.log("[http-gateway] verify via", url);
           const response = await postJson(url, forwardBody, verifyTimeout);
-          if (response.status === 200) return response.body === true ? { kind: "true" } : { kind: "false" };
-          return { kind: "error", status: response.status, body: response.body };
-        } catch {
-          return { kind: "fail" };
-        }
-      });
-
-      const results = await Promise.allSettled(attempts);
-      let trueCount = 0;
-      let sawFalse = false;
-      let firstError: { status: number; body: any } | undefined;
-      for (const r of results) {
-        if (r.status !== "fulfilled") continue;
-        const v = r.value;
-        if (v.kind === "true") {
-          trueCount += 1;
-        } else if (v.kind === "false") {
-          sawFalse = true;
-        } else if (v.kind === "error" && !firstError) {
-          // Note: fix variable shadowing issue here
-          firstError = { status: v.status as number, body: v.body };
+          if (response.status === 200) return res.status(200).json(response.body === true);
+          if (options.debug) console.log("[http-gateway] verify non-200 from", url, response.status, response.body);
+          lastError = { status: response.status, body: response.body };
+        } catch (e: any) {
+          if (options.debug) console.log("[http-gateway] verify network error from", url, e?.message);
         }
       }
-
-      if (typeof trueCount === "number" && trueCount >= verifyQuorum) return res.status(200).json(true);
-      if (sawFalse) return res.status(200).json(false);
-      if (firstError) return res.status(400).json(firstError.body);
+      if (lastError) return res.status(400).json(lastError.body);
       return res.status(503).json({ error: "Verification unavailable" });
     } catch (err: any) {
       return res.status(500).json({ error: "Internal error", message: err?.message });
@@ -179,7 +131,6 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
         ? { paymentPayload: { header: inbound.paymentHeader }, paymentRequirements: inbound.paymentRequirements }
         : inbound;
     try {
-      if (options.verifyMode === "single") {
         const shuffled = choosePeerOrder(peers, forwardBody);
         let lastError: { status: number; body: any } | undefined;
         for (const base of shuffled) {
@@ -196,37 +147,6 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
         }
         if (lastError) return res.status(400).json(lastError.body);
         return res.status(503).json({ error: "Verification unavailable" });
-      }
-      type Attempt =
-        | { kind: "true" }
-        | { kind: "false" }
-        | { kind: "error"; status: number; body: any }
-        | { kind: "fail" };
-      const attempts = peers.map(async (base) => {
-        try {
-          const url = base.replace(/\/$/, "") + "/verify";
-          const response = await postJson(url, forwardBody, verifyTimeout);
-          if (response.status === 200) return response.body === true ? { kind: "true" } : { kind: "false" };
-          return { kind: "error", status: response.status, body: response.body };
-        } catch {
-          return { kind: "fail" };
-        }
-      });
-      const results = await Promise.allSettled(attempts);
-      let trueCount = 0;
-      let sawFalse = false;
-      let firstError: { status: number; body: any } | undefined;
-      for (const r of results) {
-        if (r.status !== "fulfilled") continue;
-        const v = r.value;
-        if (v.kind === "true") trueCount += 1;
-        else if (v.kind === "false") sawFalse = true;
-        else if (v.kind === "error" && !firstError) firstError = { status: (v as any).status, body: (v as any).body };
-      }
-      if (typeof trueCount === "number" && trueCount >= verifyQuorum) return res.status(200).json(true);
-      if (sawFalse) return res.status(200).json(false);
-      if (firstError) return res.status(400).json(firstError.body);
-      return res.status(503).json({ error: "Verification unavailable" });
     } catch (err: any) {
       return res.status(500).json({ error: "Internal error", message: err?.message });
     }

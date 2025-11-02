@@ -15,15 +15,12 @@ import {
 } from "x402/types";
 import { verify, settle } from "x402/facilitator";
 import type { Chain } from "viem/chains";
-import type { DecentralizedConfig } from "./p2p.js";
-import { P2PManager } from "./p2p.js";
 
 export type FacilitatorConfig = {
   evmPrivateKey?: `0x${string}`;
   svmPrivateKey?: string;
   svmRpcUrl?: string;
   networks?: readonly Chain[];
-  decentralized?: DecentralizedConfig;
 };
 
 export type HandlerRequest = {
@@ -43,19 +40,6 @@ export class Facilitator {
   private readonly svmRpcUrl?: string;
   private readonly networks: readonly Chain[];
   private readonly x402Config: X402Config | undefined;
-  public readonly p2p?: {
-    start: () => Promise<void>;
-    stop: () => Promise<void>;
-    requestVerify: (peerId: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
-    requestSettle: (peerId: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
-    requestVerifyByMultiaddr: (multiaddr: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
-    requestSettleByMultiaddr: (multiaddr: string, body: unknown, timeoutMs?: number) => Promise<HandlerResponse>;
-    requestHealth: (peerId: string) => Promise<HandlerResponse>;
-    requestHealthByMultiaddr: (multiaddr: string) => Promise<HandlerResponse>;
-    onAnnouncement: (handler: (peerId: string, kinds: SupportedPaymentKind[]) => void) => () => void;
-    getPeerId: () => string | undefined;
-    getMultiaddrs: () => string[];
-  };
 
   constructor(config: FacilitatorConfig) {
     this.evmPrivateKey = config.evmPrivateKey;
@@ -64,44 +48,6 @@ export class Facilitator {
     this.networks = config.networks ?? [];
     this.x402Config = this.svmRpcUrl ? { svmConfig: { rpcUrl: this.svmRpcUrl } } : undefined;
 
-    if (config.decentralized?.enabled) {
-      const manager = new P2PManager(
-        config.decentralized,
-        async (req) => this.handleRequest(req),
-        async () => this.getSupportedKinds()
-      );
-      this.p2p = {
-        start: () => manager.start(),
-        stop: () => manager.stop(),
-        requestVerify: async (peerId, body, timeoutMs) => {
-          const res = await manager.requestVerify(peerId, { paymentPayload: (body as any)?.paymentPayload, paymentRequirements: (body as any)?.paymentRequirements }, timeoutMs);
-          return { status: res.status, body: res.body };
-        },
-        requestSettle: async (peerId, body, timeoutMs) => {
-          const res = await manager.requestSettle(peerId, { paymentPayload: (body as any)?.paymentPayload, paymentRequirements: (body as any)?.paymentRequirements }, timeoutMs);
-          return { status: res.status, body: res.body };
-        },
-        requestVerifyByMultiaddr: async (multiaddr, body, timeoutMs) => {
-          const res = await manager.requestVerifyByMultiaddr(multiaddr, { paymentPayload: (body as any)?.paymentPayload, paymentRequirements: (body as any)?.paymentRequirements }, timeoutMs);
-          return { status: res.status, body: res.body };
-        },
-        requestSettleByMultiaddr: async (multiaddr, body, timeoutMs) => {
-          const res = await manager.requestSettleByMultiaddr(multiaddr, { paymentPayload: (body as any)?.paymentPayload, paymentRequirements: (body as any)?.paymentRequirements }, timeoutMs);
-          return { status: res.status, body: res.body };
-        },
-        requestHealth: async (peerId) => {
-          const res = await manager.requestHealth(peerId);
-          return { status: res.status, body: res.body };
-        },
-        requestHealthByMultiaddr: async (multiaddr) => {
-          const res = await manager.requestHealthByMultiaddr(multiaddr);
-          return { status: res.status, body: res.body };
-        },
-        onAnnouncement: (handler) => manager.onAnnouncement(handler),
-        getPeerId: () => manager.getPeerId(),
-        getMultiaddrs: () => manager.getMultiaddrs(),
-      };
-    }
   }
 
   async handleRequest(req: HandlerRequest): Promise<HandlerResponse> {
