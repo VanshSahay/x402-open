@@ -104,7 +104,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
         try {
           if (options.debug) console.log("[http-gateway] verify via", url);
           const response = await postJson(url, forwardBody, verifyTimeout);
-          if (response.status === 200) return res.status(200).json(response.body === true);
+          if (response.status === 200) return res.status(200).json(response.body);
           if (options.debug) console.log("[http-gateway] verify non-200 from", url, response.status, response.body);
           lastError = { status: response.status, body: response.body };
         } catch (e: any) {
@@ -138,14 +138,14 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
           try {
             if (options.debug) console.log("[http-gateway] verify via", url);
             const response = await postJson(url, forwardBody, verifyTimeout);
-            if (response.status === 200) return res.status(200).json(response.body === true);
+            if (response.status === 200) return res.status(200).json(response.body);
             if (options.debug) console.log("[http-gateway] verify non-200 from", url, response.status, response.body);
             lastError = { status: response.status, body: response.body };
           } catch (e: any) {
             if (options.debug) console.log("[http-gateway] verify network error from", url, e?.message);
           }
         }
-        if (lastError) return res.status(400).json(lastError.body);
+        if (lastError) return res.status(lastError.status).json(lastError.body);
         return res.status(503).json({ error: "Verification unavailable" });
     } catch (err: any) {
       return res.status(500).json({ error: "Internal error", message: err?.message });
