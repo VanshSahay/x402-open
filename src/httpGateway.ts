@@ -79,12 +79,17 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
       for (const r of results) {
         if (r.status !== "fulfilled") continue;
         const v = r.value;
-        if (v.kind === "true") trueCount += 1;
-        else if (v.kind === "false") sawFalse = true;
-        else if (v.kind === "error" && !firstError) firstError = { status: v.status, body: v.body };
+        if (v.kind === "true") {
+          trueCount += 1;
+        } else if (v.kind === "false") {
+          sawFalse = true;
+        } else if (v.kind === "error" && !firstError) {
+          // Note: fix variable shadowing issue here
+          firstError = { status: v.status as number, body: v.body };
+        }
       }
 
-      if (trueCount >= verifyQuorum) return res.status(200).json({ isValid: true, invalidReason: null });
+      if (typeof trueCount === "number" && trueCount >= verifyQuorum) return res.status(200).json({ isValid: true, invalidReason: null });
       if (sawFalse) return res.status(200).json({ isValid: false, invalidReason: null });
       if (firstError) {
         const reason = typeof firstError.body?.error === "string" ? firstError.body.error : undefined;
