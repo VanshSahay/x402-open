@@ -5,6 +5,7 @@ export type HttpGatewayOptions = {
   httpPeers: string[]; // e.g. ["http://localhost:4101/facilitator", "http://localhost:4102/facilitator"]
   verifyQuorum?: number; // default 1
   timeoutMs?: number; // default 10s verify, 30s settle
+  debug?: boolean;
 };
 
 async function postJson(url: string, body: unknown, timeoutMs: number): Promise<{ status: number; body: any }> {
@@ -111,20 +112,26 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
       : inbound?.paymentHeader && inbound?.paymentRequirements
         ? { paymentPayload: { header: inbound.paymentHeader }, paymentRequirements: inbound.paymentRequirements }
         : inbound;
-
-    const peer = pickRandom(peers);
-    try {
+    // Try peers in random order until one returns 200 or all fail
+    const shuffled = [...peers].sort(() => Math.random() - 0.5);
+    for (const peer of shuffled) {
       const url = peer.replace(/\/$/, "") + "/settle";
-      const response = await postJson(url, forwardBody, settleTimeout);
-      if (response.status === 200) {
-        const txHash = (response.body as any)?.txHash ?? null;
-        return res.status(200).json({ success: true, error: null, txHash, networkId: null });
+      try {
+        if (options.debug) console.log("[http-gateway] settling via", url);
+        const response = await postJson(url, forwardBody, settleTimeout);
+        if (response.status === 200) {
+          const txHash = (response.body as any)?.txHash ?? null;
+          return res.status(200).json({ success: true, error: null, txHash, networkId: null });
+        }
+        const errMsg = (response.body as any)?.error ?? "Settle error";
+        if (options.debug) console.log("[http-gateway] settle non-200 from", url, response.status, errMsg);
+        // try next peer
+      } catch (err: any) {
+        if (options.debug) console.log("[http-gateway] settle network error from", url, err?.message);
+        // try next peer
       }
-      const errMsg = (response.body as any)?.error ?? "Settle error";
-      return res.status(200).json({ success: false, error: errMsg, txHash: null, networkId: null });
-    } catch (err: any) {
-      return res.status(503).json({ success: false, error: "Settle unavailable", txHash: null, networkId: null });
     }
+    return res.status(503).json({ success: false, error: "Settle unavailable", txHash: null, networkId: null });
   });
 }
 
