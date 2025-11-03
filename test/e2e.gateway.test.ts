@@ -82,7 +82,6 @@ describe("E2E: HTTP Gateway with two nodes", () => {
         `${nodeB.url}/facilitator`,
       ],
       // Deterministic routing ensures verify and settle go to same node for a header
-      selection: "headerHash",
       debug: true,
     });
   });
