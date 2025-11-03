@@ -29,7 +29,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
   const basePath = options.basePath ?? "";
   const verifyTimeout = 10_000;
   const settleTimeout = 30_000;
-  const selectionTtlMs = 5 * 60_000; // keep selection for 5 minutes by default
+  const selectionTtlMs = 1 * 60_000; // keep selection for 1 minutes by default
 
   function normalizePath(path: string): string {
     const p = basePath + path;
@@ -45,12 +45,29 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
   }
 
   const selectionByHeader = new Map<string, { peer: string; expiresAt: number }>();
+  const selectionByPayer = new Map<string, { peer: string; expiresAt: number }>();
 
   // Select a random peer. We will persist the chosen peer AFTER a successful verify
   // so that subsequent settle for the same header uses the same node.
   function pickSelectedPeerForVerify(peers: string[]): string {
     if (peers.length === 1) return peers[0];
     return pickRandom(peers);
+  }
+
+  function getPayerFromBody(body: any): string | undefined {
+    try {
+      return body?.paymentPayload?.payload?.authorization?.from;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function getPayerFromVerifyResponse(respBody: any): string | undefined {
+    if (respBody && typeof respBody === "object") {
+      const p = (respBody as any).payer;
+      if (typeof p === "string" && p.length > 0) return p;
+    }
+    return undefined;
   }
 
   function rotateToNext(peers: string[], current: string): string[] {
@@ -85,7 +102,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
     return res.status(200).json({ kinds: uniq });
   });
 
-  // POST /verify — single randomly selected node (sticky per payment header)
+  // POST /verify — single randomly selected node (stick to this node by payer/header)
   router.post(normalizePath("/verify"), async (req: Request, res: Response) => {
     const peers = options.httpPeers;
     if (!peers || peers.length === 0) return res.status(503).json({ error: "No peers configured" });
@@ -108,9 +125,12 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
           if (options.debug) console.log("[http-gateway] verify via", url);
           const response = await postJson(url, forwardBody, verifyTimeout);
           if (response.status === 200) {
-            // Store sticky selection for future settle
+            // Store sticky selection for future settle by payer (preferred) and header (fallback)
+            const now = Date.now();
+            const payer = getPayerFromVerifyResponse(response.body) ?? getPayerFromBody(forwardBody);
+            if (payer) selectionByPayer.set(payer.toLowerCase(), { peer: base, expiresAt: now + selectionTtlMs });
             const key = getHeaderFromBody(forwardBody);
-            if (key) selectionByHeader.set(key, { peer: base, expiresAt: Date.now() + selectionTtlMs });
+            if (key) selectionByHeader.set(key, { peer: base, expiresAt: now + selectionTtlMs });
             return res.status(200).json(response.body);
           }
           if (options.debug) console.log("[http-gateway] verify non-200 from", url, response.status, response.body);
@@ -127,7 +147,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
   });
 
 
-  // POST /settle — use the same selected node (sticky by header); fallback to others on failure
+  // POST /settle — use the same selected node (sticky by payer/header); fallback to others on failure
   router.post(normalizePath("/settle"), async (req: Request, res: Response) => {
     const peers = options.httpPeers;
     if (!peers || peers.length === 0) return res.status(503).json({ success: false, error: "No peers configured", txHash: null, networkId: null });
@@ -137,9 +157,15 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
       : inbound?.paymentHeader && inbound?.paymentRequirements
         ? { paymentPayload: { header: inbound.paymentHeader }, paymentRequirements: inbound.paymentRequirements }
         : inbound;
-    // Use sticky selection first, then try others
+    // Use sticky selection first (payer), then header, then random
+    const payer = getPayerFromBody(forwardBody)?.toLowerCase();
+    const now = Date.now();
+    const byPayer = payer ? selectionByPayer.get(payer) : undefined;
+    const chosenByPayer = byPayer && byPayer.expiresAt > now ? byPayer.peer : undefined;
     const key = getHeaderFromBody(forwardBody);
-    const preferred = key && selectionByHeader.get(key)?.peer ? selectionByHeader.get(key)!.peer : pickSelectedPeerForVerify(peers);
+    const byHeader = key ? selectionByHeader.get(key) : undefined;
+    const chosenByHeader = byHeader && byHeader.expiresAt > now ? byHeader.peer : undefined;
+    const preferred = chosenByPayer ?? chosenByHeader ?? pickSelectedPeerForVerify(peers);
     const order = rotateToNext(peers, preferred);
     for (const peer of order) {
       const url = peer.replace(/\/$/, "") + "/settle";
