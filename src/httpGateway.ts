@@ -30,6 +30,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
   const verifyTimeout = 10_000;
   const settleTimeout = 30_000;
   const selectionTtlMs = 1 * 60_000; // keep selection for 1 minutes by default
+  const registryTtlMs = 2 * 60_000; // registered peers expire if no heartbeat
 
   function normalizePath(path: string): string {
     const p = basePath + path;
@@ -46,6 +47,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
 
   const selectionByHeader = new Map<string, { peer: string; expiresAt: number }>();
   const selectionByPayer = new Map<string, { peer: string; expiresAt: number }>();
+  const registeredPeers = new Map<string, { url: string; kinds?: any[]; lastSeenMs: number }>();
 
   // Select a random peer. We will persist the chosen peer AFTER a successful verify
   // so that subsequent settle for the same header uses the same node.
@@ -78,7 +80,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
 
   // GET /supported — aggregate from peers
   router.get(normalizePath("/supported"), async (_req: Request, res: Response) => {
-    const peers = options.httpPeers;
+    const peers = getActivePeers();
     if (!peers || peers.length === 0) return res.status(200).json({ kinds: [] });
     const results = await Promise.allSettled(peers.map(async (base) => {
       try {
@@ -104,7 +106,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
 
   // POST /verify — single randomly selected node (stick to this node by payer/header)
   router.post(normalizePath("/verify"), async (req: Request, res: Response) => {
-    const peers = options.httpPeers;
+    const peers = getActivePeers();
     if (!peers || peers.length === 0) return res.status(503).json({ error: "No peers configured" });
 
     // Accept both spec and internal body shapes
@@ -149,7 +151,7 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
 
   // POST /settle — use the same selected node (sticky by payer/header); fallback to others on failure
   router.post(normalizePath("/settle"), async (req: Request, res: Response) => {
-    const peers = options.httpPeers;
+    const peers = getActivePeers();
     if (!peers || peers.length === 0) return res.status(503).json({ success: false, error: "No peers configured", txHash: null, networkId: null });
     const inbound = req.body as any;
     const forwardBody = inbound?.paymentPayload && inbound?.paymentRequirements
@@ -182,6 +184,32 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
     }
     return res.status(503).json({ success: false, error: "Settle unavailable", txHash: null, networkId: null });
   });
+
+  // POST /register — nodes can self-register with the gateway
+  // Body: { url: string; kinds?: any[] }
+  router.post(normalizePath("/register"), async (req: Request, res: Response) => {
+    try {
+      const url = String((req.body as any)?.url || "").trim();
+      if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ error: "Invalid url" });
+      const kinds = (req.body as any)?.kinds;
+      registeredPeers.set(url, { url, kinds, lastSeenMs: Date.now() });
+      return res.status(200).json({ ok: true });
+    } catch (e: any) {
+      return res.status(400).json({ error: e?.message || "Invalid request" });
+    }
+  });
+
+  function getActivePeers(): string[] {
+    const out = new Set<string>();
+    // include statically configured peers (if any)
+    for (const p of options.httpPeers ?? []) out.add(p.replace(/\/$/, ""));
+    // include registered peers within TTL
+    const now = Date.now();
+    for (const { url, lastSeenMs } of registeredPeers.values()) {
+      if (now - lastSeenMs <= registryTtlMs) out.add(url.replace(/\/$/, ""));
+    }
+    return Array.from(out);
+  }
 
 }
 
