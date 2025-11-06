@@ -1,10 +1,10 @@
 # x402-open
 
-Core facilitator utilities for building X402 payment facilitators in Node.js/Express.
+Decentralized facilitator toolkit for the X402 protocol. Anyone can run a facilitator node, or point a gateway at multiple nodes to expose a single public URL.
 
-- Exposes a `Facilitator` class that implements the X402 flow
-- Provides `createExpressAdapter` to mount ready-to-use HTTP endpoints
-- Works with EVM networks (via `viem/chains`) and optional SVM support
+- `Facilitator`: EVM and Solana (SVM) support
+- `createExpressAdapter`: mounts `/supported`, `/verify`, `/settle`
+- `createHttpGatewayAdapter`: routes requests across multiple nodes
 
 ## Installation
 
@@ -16,7 +16,7 @@ npm i x402-open express viem
 
 Note: `express` is a peer dependency of this package.
 
-## Quickstart (Express)
+## Quickstart (run a facilitator node)
 
 ```ts
 import express from "express";
@@ -28,68 +28,70 @@ app.use(express.json());
 
 const facilitator = new Facilitator({
   evmPrivateKey: process.env.EVM_PRIVATE_KEY as `0x${string}`,
-  networks: [baseSepolia],
+  evmNetworks: [baseSepolia],
+  // Optional SVM:
+  // svmPrivateKey: process.env.SOLANA_PRIVATE_KEY,
+  // svmNetworks: ["solana-devnet"],
 });
 
-// Mounts GET /facilitator/supported, POST /facilitator/verify, POST /facilitator/settle
+// GET /facilitator/supported, POST /facilitator/verify, POST /facilitator/settle
 createExpressAdapter(facilitator, app, "/facilitator");
 
-app.listen(3000, () => {
-  console.log("Listening on http://localhost:3000");
-});
+app.listen(4101, () => console.log("Node HTTP on 4101"));
 ```
 
-## Endpoints
+### Node endpoints
 
-Mounted base path: your choice (e.g. `"/facilitator"`).
+Base path: e.g. `/facilitator`.
 
 - GET `<basePath>/supported`
-  - Returns supported payment kinds based on configured networks/keys.
+  - Returns `{ kinds: [{ scheme, network, extra? }, ...] }` based on configured networks/keys
 - POST `<basePath>/verify`
   - Body: `{ paymentPayload, paymentRequirements }`
-  - Validates an X402 authorization using `x402` SDK.
+  - Forwards the underlying facilitator verification result
 - POST `<basePath>/settle`
   - Body: `{ paymentPayload, paymentRequirements }`
-  - Settles a payment on-chain using the appropriate signer.
+  - Returns a settlement object (e.g., `{ txHash, ... }`)
 
-The `paymentPayload` and `paymentRequirements` types are defined in the `x402` package. Refer to the `x402` docs for exact schemas: `https://www.npmjs.com/package/x402`.
+The `paymentPayload` and `paymentRequirements` types come from the `x402` package.
 
-## API
+## Run a server with a co-located node
 
-### `new Facilitator(config)`
+```ts
+import express from "express";
+import { paymentMiddleware } from "x402-express";
+import { Facilitator, createExpressAdapter } from "x402-open";
+import { baseSepolia } from "viem/chains";
 
-Config:
-- `evmPrivateKey?: \`0x${string}\``: Private key for EVM settlements
-- `svmPrivateKey?: string`: Private key for SVM settlements (optional)
-- `svmRpcUrl?: string`: Custom SVM RPC URL (optional)
-- `networks?: readonly Chain[]`: EVM chains (from `viem/chains`) to advertise in `/supported`
- - `decentralized?: { enabled: boolean; bootstrapPeers?: string[]; relay?: { enabled?: boolean }; announceAddrs?: string[]; dataDir?: string; allowlist?: string[] }`
+const app = express();
+app.use(express.json());
 
-Methods:
-- `handleRequest({ method, path, body? })` → `{ status, body }`
-  - Low-level handler used by the Express adapter
+const facilitator = new Facilitator({
+  evmPrivateKey: process.env.PRIVATE_KEY as `0x${string}`,
+  evmNetworks: [baseSepolia],
+  // svmPrivateKey: process.env.SOLANA_PRIVATE_KEY,
+  // svmNetworks: ["solana-devnet"],
+});
 
-### `createExpressAdapter(facilitator, routerOrApp, basePath = "")`
+createExpressAdapter(facilitator, app, "/facilitator");
 
-- Mounts the three endpoints listed above on an Express `Router` or `App` at `basePath`.
+app.use(paymentMiddleware(
+  "0xYourReceivingWallet",
+  {
+    "GET /weather": { price: "$0.0001", network: "base-sepolia" },
+    // or: "GET /weather": { price: "$0.0001", network: "solana-devnet" }
+  },
+  { url: "http://localhost:4021/facilitator" }
+));
 
-### Gateway (HTTP only)
+app.get("/weather", (_req, res) => {
+  res.send({ report: { weather: "sunny", temperature: 70 } });
+});
 
-Expose one URL that behaves like a facilitator and forwards to multiple node URLs.
+app.listen(4021, () => console.log("Server on http://localhost:4021"));
+```
 
-## SVM (optional)
-
-Provide `svmPrivateKey` (and optionally `svmRpcUrl`) to enable SVM support. Currently, the adapter advertises `solana-devnet` in `/supported` when an SVM key is provided.
-
-## Notes
-
-- This package depends on `x402` under the hood for verification and settlement logic.
-- For EVM support in `/supported`, pass the target `viem` chains via the `networks` array.
-- On error, endpoints return `400` with `{ error: string }` or `500` for unexpected failures.
-
-See `MULTINODE.md` for a local multi-node example.
-
-If you prefer to route via HTTP, use `createHttpGatewayAdapter` and list node URLs (where their Express adapter is mounted).
+## Gateway (single URL, many nodes)
 
 ```ts
 import express from "express";
@@ -103,18 +105,42 @@ createHttpGatewayAdapter(app, {
   httpPeers: [
     "http://localhost:4101/facilitator",
     "http://localhost:4102/facilitator",
+    "http://localhost:4103/facilitator",
   ],
-  // selection: "headerHash" | "random" (default: headerHash)
+  debug: true,
 });
 
 app.listen(8080, () => console.log("HTTP Gateway on http://localhost:8080"));
 ```
 
-Mounted endpoints (at basePath):
-- GET `/supported` → aggregated kinds
-- POST `/verify` → returns boolean
-- POST `/settle` → returns node settlement response
+### Gateway behavior
 
-## License
+- POST `/facilitator/verify`:
+  - Chooses a random node per request; forwards the node’s response body as-is
+  - Stores the chosen node keyed by payer (from verify response `payer`, or from `authorization.from`) and by header (fallback)
+- POST `/facilitator/settle`:
+  - Sends to the same node chosen during verify (sticky by payer/header); falls back to others on error
+- GET `/facilitator/supported`:
+  - Aggregates kinds across all nodes
 
-ISC
+## Facilitator configuration
+
+```ts
+new Facilitator({
+  evmPrivateKey?: `0x${string}`,
+  svmPrivateKey?: string,
+  evmNetworks?: readonly Chain[],   // EVM chains (via viem), e.g. [baseSepolia]
+  svmNetworks?: readonly string[],  // SVM networks, e.g. ["solana-devnet"]
+  // Back-compat: 'networks' maps to evmNetworks
+})
+```
+
+- To support EVM: set `evmPrivateKey` and list `evmNetworks` (e.g., `base-sepolia`)
+- To support Solana: set `svmPrivateKey` (and optional `svmRpcUrl`) and list `svmNetworks` (e.g., `"solana-devnet"`)
+- `/supported` will only advertise what you configure
+
+## Notes
+
+- Uses `x402` for verification and settlement logic
+- Errors return `400 { error }` or `500` for unexpected failures
+- Gateway selections are in-memory and expire after ~1 minute

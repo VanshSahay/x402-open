@@ -20,6 +20,10 @@ export type FacilitatorConfig = {
   evmPrivateKey?: `0x${string}`;
   svmPrivateKey?: string;
   svmRpcUrl?: string;
+  // New, clearer options:
+  evmNetworks?: readonly Chain[]; // EVM chains (viem)
+  svmNetworks?: readonly string[]; // e.g. ["solana-devnet"]
+  // Back-compat: previously used 'networks' for EVM only
   networks?: readonly Chain[];
 };
 
@@ -38,14 +42,16 @@ export class Facilitator {
   private readonly evmPrivateKey?: `0x${string}`;
   private readonly svmPrivateKey?: string;
   private readonly svmRpcUrl?: string;
-  private readonly networks: readonly Chain[];
+  private readonly evmNetworks: readonly Chain[];
+  private readonly svmNetworks: readonly string[];
   private readonly x402Config: X402Config | undefined;
 
   constructor(config: FacilitatorConfig) {
     this.evmPrivateKey = config.evmPrivateKey;
     this.svmPrivateKey = config.svmPrivateKey;
     this.svmRpcUrl = config.svmRpcUrl;
-    this.networks = config.networks ?? [];
+    this.evmNetworks = (config.evmNetworks ?? config.networks) ?? [];
+    this.svmNetworks = config.svmNetworks ?? (this.svmPrivateKey ? ["solana-devnet"] : []);
     this.x402Config = this.svmRpcUrl ? { svmConfig: { rpcUrl: this.svmRpcUrl } } : undefined;
 
   }
@@ -111,18 +117,20 @@ export class Facilitator {
   private async getSupportedKinds(): Promise<SupportedPaymentKind[]> {
     const kinds: SupportedPaymentKind[] = [];
 
-    if (this.evmPrivateKey && this.networks.length > 0) {
-      for (const chain of this.networks) {
+    if (this.evmPrivateKey && this.evmNetworks.length > 0) {
+      for (const chain of this.evmNetworks) {
         const network = this.getViemChainNetwork(chain) as SupportedPaymentKind["network"];
         kinds.push({ x402Version: 1, scheme: "exact", network });
       }
     }
 
-    if (this.svmPrivateKey) {
-      // Default to solana-devnet for now; can be extended to accept SVM networks later
-      const signer = await createSigner("solana-devnet", this.svmPrivateKey);
-      const feePayer = isSvmSignerWallet(signer) ? signer.address : undefined;
-      kinds.push({ x402Version: 1, scheme: "exact", network: "solana-devnet", extra: { feePayer } });
+    if (this.svmPrivateKey && this.svmNetworks.length > 0) {
+      for (const network of this.svmNetworks) {
+        if (!SupportedSVMNetworks.includes(network as any)) continue;
+        const signer = await createSigner(network as any, this.svmPrivateKey);
+        const feePayer = isSvmSignerWallet(signer) ? signer.address : undefined;
+        kinds.push({ x402Version: 1, scheme: "exact", network: network as SupportedPaymentKind["network"], extra: { feePayer } });
+      }
     }
 
     return kinds;
