@@ -1,10 +1,11 @@
 # x402-open
 
-Decentralized facilitator toolkit for the X402 protocol. Anyone can run a facilitator node, or point a gateway at multiple nodes to expose a single public URL.
+Decentralized facilitator toolkit for the X402 protocol. Run a facilitator node anywhere, or point a gateway at multiple nodes to get a single public URL that verifies and settles payments through the network.
 
-- `Facilitator`: EVM and Solana (SVM) support
-- `createExpressAdapter`: mounts `/supported`, `/verify`, `/settle`
-- `createHttpGatewayAdapter`: routes requests across multiple nodes
+- Facilitator node: EVM + SVM (Solana) support
+- Express adapter: mounts `/supported`, `/verify`, `/settle`
+- HTTP gateway: routes `verify` and `settle` across many nodes
+- Auto-registration: nodes can self-register with the gateway (no manual peer lists)
 
 ## Installation
 
@@ -14,9 +15,10 @@ pnpm add x402-open express viem
 npm i x402-open express viem
 ```
 
-Note: `express` is a peer dependency of this package.
+`express` is a peer dependency.
 
-## Quickstart (run a facilitator node)
+---
+## Run a facilitator node
 
 ```ts
 import express from "express";
@@ -27,35 +29,31 @@ const app = express();
 app.use(express.json());
 
 const facilitator = new Facilitator({
-  evmPrivateKey: process.env.EVM_PRIVATE_KEY as `0x${string}`,
-  evmNetworks: [baseSepolia],
-  // Optional SVM:
-  // svmPrivateKey: process.env.SOLANA_PRIVATE_KEY,
-  // svmNetworks: ["solana-devnet"],
+  // EVM support
+  evmPrivateKey: process.env.PRIVATE_KEY as `0x${string}`,
+  evmNetworks: [baseSepolia], // advertise base-sepolia via /supported
+
+  // SVM (Solana) support (optional)
+  // svmPrivateKey: process.env.SOLANA_PRIVATE_KEY!,
+  // svmNetworks: ["solana-devnet"], // advertise solana-devnet via /supported
 });
 
-// GET /facilitator/supported, POST /facilitator/verify, POST /facilitator/settle
+// Exposes: GET /facilitator/supported, POST /facilitator/verify, POST /facilitator/settle
 createExpressAdapter(facilitator, app, "/facilitator");
 
-app.listen(4101, () => console.log("Node HTTP on 4101"));
+app.listen(4101, () => console.log("Node HTTP on http://localhost:4101"));
 ```
 
 ### Node endpoints
 
-Base path: e.g. `/facilitator`.
-
-- GET `<basePath>/supported`
-  - Returns `{ kinds: [{ scheme, network, extra? }, ...] }` based on configured networks/keys
-- POST `<basePath>/verify`
-  - Body: `{ paymentPayload, paymentRequirements }`
-  - Forwards the underlying facilitator verification result
-- POST `<basePath>/settle`
-  - Body: `{ paymentPayload, paymentRequirements }`
-  - Returns a settlement object (e.g., `{ txHash, ... }`)
+- `GET /facilitator/supported` → `{ kinds: [{ scheme, network, extra? }, ...] }`
+- `POST /facilitator/verify` → body `{ paymentPayload, paymentRequirements }` → returns a verify result (boolean or object depending on underlying X402 impl)
+- `POST /facilitator/settle` → body `{ paymentPayload, paymentRequirements }` → returns settlement result (e.g., `{ txHash, ... }`)
 
 The `paymentPayload` and `paymentRequirements` types come from the `x402` package.
 
-## Run a server with a co-located node
+---
+## Run a server with a co‑located node
 
 ```ts
 import express from "express";
@@ -72,17 +70,18 @@ const facilitator = new Facilitator({
   // svmPrivateKey: process.env.SOLANA_PRIVATE_KEY,
   // svmNetworks: ["solana-devnet"],
 });
-
 createExpressAdapter(facilitator, app, "/facilitator");
 
-app.use(paymentMiddleware(
-  "0xYourReceivingWallet",
-  {
-    "GET /weather": { price: "$0.0001", network: "base-sepolia" },
-    // or: "GET /weather": { price: "$0.0001", network: "solana-devnet" }
-  },
-  { url: "http://localhost:4021/facilitator" }
-));
+app.use(
+  paymentMiddleware(
+    "0xYourReceivingWallet",
+    {
+      "GET /weather": { price: "$0.0001", network: "base-sepolia" },
+      // or: "GET /weather": { price: "$0.0001", network: "solana-devnet" }
+    },
+    { url: "http://localhost:4021/facilitator" }
+  )
+);
 
 app.get("/weather", (_req, res) => {
   res.send({ report: { weather: "sunny", temperature: 70 } });
@@ -91,7 +90,8 @@ app.get("/weather", (_req, res) => {
 app.listen(4021, () => console.log("Server on http://localhost:4021"));
 ```
 
-## Gateway (single URL, many nodes)
+---
+## Run the HTTP gateway (single URL for many nodes)
 
 ```ts
 import express from "express";
@@ -102,10 +102,11 @@ app.use(express.json());
 
 createHttpGatewayAdapter(app, {
   basePath: "/facilitator",
+  // Optional static peers; can be empty when using auto-registration
   httpPeers: [
     "http://localhost:4101/facilitator",
-    "http://localhost:4102/facilitator",
-    "http://localhost:4103/facilitator",
+    // "http://localhost:4102/facilitator",
+    // "http://localhost:4103/facilitator",
   ],
   debug: true,
 });
@@ -115,32 +116,76 @@ app.listen(8080, () => console.log("HTTP Gateway on http://localhost:8080"));
 
 ### Gateway behavior
 
-- POST `/facilitator/verify`:
-  - Chooses a random node per request; forwards the node’s response body as-is
-  - Stores the chosen node keyed by payer (from verify response `payer`, or from `authorization.from`) and by header (fallback)
-- POST `/facilitator/settle`:
-  - Sends to the same node chosen during verify (sticky by payer/header); falls back to others on error
-- GET `/facilitator/supported`:
-  - Aggregates kinds across all nodes
+- `POST /facilitator/verify`
+  - Selects a random node for each request
+  - Forwards the node’s verification response body as‑is
+  - Caches the chosen node keyed by payer (from `verify` response `payer`, or from `paymentPayload.payload.authorization.from`) and by header as a fallback (cache TTL ~1 minute)
+- `POST /facilitator/settle`
+  - Sends to the same node selected during `verify` (sticky by payer/header)
+  - Falls back to other nodes if the selected node errors
+- `GET /facilitator/supported`
+  - Aggregates kinds from all known nodes (static + registered)
+- `POST /facilitator/register`
+  - For node auto‑registration (see below)
 
+---
+## Auto‑register nodes (no manual gateway config)
+
+Nodes can self‑register with one or more gateways so you don’t have to edit `httpPeers`.
+
+```ts
+import { startGatewayRegistration } from "x402-open";
+
+// After starting your node at http://localhost:4101/facilitator
+const stop = startGatewayRegistration({
+  gatewayUrls: ["http://localhost:8080/facilitator"],
+  nodeBaseUrl: "http://localhost:4101/facilitator",
+  // Optional: include supported kinds in your registration
+  kindsProvider: async () => {
+    const r = await fetch("http://localhost:4101/facilitator/supported");
+    const j = await r.json();
+    return j?.kinds ?? [];
+  },
+  debug: true,
+});
+
+// call `stop()` to stop heartbeats
+```
+
+The gateway keeps a registry of active nodes, expiring entries without a recent heartbeat (~2 minutes). Static `httpPeers` and registered peers are merged.
+
+You can also register manually by POSTing to the gateway:
+
+```http
+POST /facilitator/register
+{
+  "url": "http://localhost:4101/facilitator",
+  "kinds": [{ "scheme": "exact", "network": "base-sepolia" }]
+}
+```
+
+---
 ## Facilitator configuration
 
 ```ts
 new Facilitator({
+  // EVM
   evmPrivateKey?: `0x${string}`,
+  evmNetworks?: readonly Chain[],     // e.g., [baseSepolia]
+
+  // SVM (Solana)
   svmPrivateKey?: string,
-  evmNetworks?: readonly Chain[],   // EVM chains (via viem), e.g. [baseSepolia]
-  svmNetworks?: readonly string[],  // SVM networks, e.g. ["solana-devnet"]
-  // Back-compat: 'networks' maps to evmNetworks
+  svmNetworks?: readonly string[],    // e.g., ["solana-devnet"]
 })
 ```
 
-- To support EVM: set `evmPrivateKey` and list `evmNetworks` (e.g., `base-sepolia`)
-- To support Solana: set `svmPrivateKey` (and optional `svmRpcUrl`) and list `svmNetworks` (e.g., `"solana-devnet"`)
-- `/supported` will only advertise what you configure
+- To support EVM: set `evmPrivateKey` and provide `evmNetworks` (e.g., `base-sepolia`)
+- To support Solana: set `svmPrivateKey` and list `svmNetworks` (e.g., `"solana-devnet"`)
+- `GET /facilitator/supported` only advertises what you configure
 
+---
 ## Notes
 
-- Uses `x402` for verification and settlement logic
+- Under the hood this package uses `x402` for verification and settlement
 - Errors return `400 { error }` or `500` for unexpected failures
-- Gateway selections are in-memory and expire after ~1 minute
+- Gateway selections are in‑memory (per process) and expire after ~1 minute
