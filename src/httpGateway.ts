@@ -42,7 +42,13 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
   }
 
   function getHeaderFromBody(body: any): string | undefined {
-    return body?.paymentHeader ?? body?.paymentPayload?.header;
+    // Prefer explicit header fields if present (EVM flow)
+    const header = body?.paymentHeader ?? body?.paymentPayload?.header;
+    if (header) return header;
+    // For Solana, we don't have a header; use the raw transaction blob as a sticky key
+    const solanaTx = body?.paymentPayload?.payload?.transaction;
+    if (typeof solanaTx === "string" && solanaTx.length > 0) return solanaTx;
+    return undefined;
   }
 
   const selectionByHeader = new Map<string, { peer: string; expiresAt: number }>();
@@ -210,6 +216,11 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
     }
     return Array.from(out);
   }
+
+  // Optional: expose current active peers for external load balancers/diagnostics
+  router.get(normalizePath("/peers"), (_req: Request, res: Response) => {
+    return res.status(200).json({ peers: getActivePeers() });
+  });
 
 }
 
