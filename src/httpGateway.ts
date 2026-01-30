@@ -54,6 +54,8 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
   const selectionByHeader = new Map<string, { peer: string; expiresAt: number }>();
   const selectionByPayer = new Map<string, { peer: string; expiresAt: number }>();
   const registeredPeers = new Map<string, { url: string; kinds?: any[]; lastSeenMs: number }>();
+  // Store peer gateways (other gateway URLs)
+  const peerGateways = new Set<string>();
 
   // Select a random peer. We will persist the chosen peer AFTER a successful verify
   // so that subsequent settle for the same header uses the same node.
@@ -82,6 +84,50 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
     if (peers.length <= 1) return peers.slice();
     const rest = peers.filter((p) => p !== current).sort(() => Math.random() - 0.5);
     return [current, ...rest];
+  }
+
+  // Discover facilitator nodes from a peer gateway and register them locally
+  async function discoverNodesFromPeerGateway(peerGatewayUrl: string): Promise<void> {
+    try {
+      // Query the peer gateway's /nodes endpoint to get its facilitator nodes
+      const url = peerGatewayUrl.replace(/\/$/, "") + normalizePath("/nodes");
+      if (options.debug) console.log("[http-gateway] discovering nodes from peer gateway", url);
+      
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5_000);
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!res.ok) {
+          if (options.debug) console.log("[http-gateway] peer gateway discovery failed", url, res.status);
+          return;
+        }
+        
+        const data = await res.json();
+        const nodeUrls = Array.isArray(data?.nodes) ? data.nodes : [];
+        
+        // Register each discovered node locally
+        const now = Date.now();
+        for (const nodeUrl of nodeUrls) {
+          if (typeof nodeUrl === "string" && /^https?:\/\//i.test(nodeUrl)) {
+            const normalizedUrl = nodeUrl.replace(/\/$/, "");
+            // Register the node as if it self-registered, but mark it as discovered from a peer gateway
+            registeredPeers.set(normalizedUrl, { url: normalizedUrl, kinds: undefined, lastSeenMs: now });
+            if (options.debug) console.log("[http-gateway] discovered node from peer gateway", normalizedUrl);
+          }
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (e: any) {
+      if (options.debug) console.log("[http-gateway] error discovering nodes from peer gateway", peerGatewayUrl, e?.message);
+    }
+  }
+  
+  // Discover facilitator nodes from all peer gateways
+  async function discoverNodesFromAllPeerGateways(): Promise<void> {
+    const peers = Array.from(peerGateways);
+    await Promise.allSettled(peers.map(peerUrl => discoverNodesFromPeerGateway(peerUrl)));
   }
 
   // GET /supported — aggregate from peers
@@ -217,10 +263,44 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
     return Array.from(out);
   }
 
-  // Optional: expose current active peers for external load balancers/diagnostics
-  router.get(normalizePath("/peers"), (_req: Request, res: Response) => {
-    return res.status(200).json({ peers: getActivePeers() });
+  // GET /nodes — expose facilitator nodes for peer gateway discovery
+  router.get(normalizePath("/nodes"), (_req: Request, res: Response) => {
+    return res.status(200).json({ nodes: getActivePeers() });
   });
+
+  // POST /peers — register a peer gateway by URL
+  router.post(normalizePath("/peers"), async (req: Request, res: Response) => {
+    try {
+      const url = String((req.body as any)?.url || "").trim();
+      if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ error: "Invalid url" });
+      const normalizedUrl = url.replace(/\/$/, "");
+      peerGateways.add(normalizedUrl);
+      
+      // Immediately discover nodes from the newly registered peer gateway
+      discoverNodesFromPeerGateway(normalizedUrl).catch(() => {
+        // Silently handle errors, discovery will retry periodically
+      });
+      
+      return res.status(200).json({ ok: true });
+    } catch (e: any) {
+      return res.status(400).json({ error: e?.message || "Invalid request" });
+    }
+  });
+
+  // GET /peers — list registered peer gateways (for debugging)
+  router.get(normalizePath("/peers"), (_req: Request, res: Response) => {
+    return res.status(200).json({ peers: Array.from(peerGateways) });
+  });
+  
+  // Periodically discover nodes from all peer gateways
+  const discoveryInterval = setInterval(() => {
+    discoverNodesFromAllPeerGateways().catch(() => {
+      // Silently handle errors
+    });
+  }, 30_000); // Discover every 30 seconds
+  
+  // Store interval ID for potential cleanup (though gateways typically run indefinitely)
+  // Note: In a real implementation, you might want to return a cleanup function
 
 }
 
