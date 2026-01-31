@@ -89,8 +89,8 @@ export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOpt
   // Discover facilitator nodes from a peer gateway and register them locally
   async function discoverNodesFromPeerGateway(peerGatewayUrl: string): Promise<void> {
     try {
-      // Query the peer gateway's /nodes endpoint to get its facilitator nodes
-      const url = peerGatewayUrl.replace(/\/$/, "") + normalizePath("/nodes");
+      // Query the peer gateway's /nodes endpoint. Peer URL already includes basePath (e.g. /facilitator)
+      const url = peerGatewayUrl.replace(/\/$/, "") + "/nodes";
       if (options.debug) console.log("[http-gateway] discovering nodes from peer gateway", url);
       
       const controller = new AbortController();

@@ -110,9 +110,49 @@ async function test() {
       peers.peers[0] === "http://localhost:8081/facilitator";
     console.log(test4Pass ? "  ✓ PASS" : "  ✗ FAIL");
 
+    // Test 5: Verify endpoint (schema-valid payload; verify may fail on-chain but should pass validation)
+    console.log("\n📋 Test 5: Verify endpoint (valid payload)");
+    const verifyBody = {
+      paymentPayload: {
+        x402Version: 1,
+        scheme: "exact",
+        network: "base-sepolia",
+        payload: {
+          signature: "0x" + "00".repeat(65),
+          authorization: {
+            from: "0x1111111111111111111111111111111111111111",
+            to: "0x2222222222222222222222222222222222222222",
+            value: "1000",
+            validAfter: "1761952780",
+            validBefore: "1761953680",
+            nonce: "0x" + "00".repeat(32),
+          },
+        },
+      },
+      paymentRequirements: {
+        scheme: "exact",
+        network: "base-sepolia",
+        maxAmountRequired: "1000",
+        resource: "http://localhost/resource",
+        description: "Test",
+        mimeType: "application/json",
+        payTo: "0x2222222222222222222222222222222222222222",
+        maxTimeoutSeconds: 300,
+        asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      },
+    };
+    const verifyRes = await fetch("http://localhost:8080/facilitator/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(verifyBody),
+    });
+    const test5Pass = verifyRes.status === 200; // Passes validation; body may be false (invalid sig) or true
+    console.log("  Verify response:", verifyRes.status, verifyRes.ok ? "(validation passed)" : await verifyRes.text());
+    console.log(test5Pass ? "  ✓ PASS - Payload validation succeeded" : "  ✗ FAIL - Check payload format");
+
     // Summary
     console.log("\n" + "=".repeat(50));
-    const allPassed = test1Pass && test1bPass && test2Pass && hasBothNodes && test4Pass;
+    const allPassed = test1Pass && test1bPass && test2Pass && hasBothNodes && test4Pass && test5Pass;
     if (allPassed) {
       console.log("✅ All tests PASSED!");
       console.log("\nGateway-to-gateway communication is working correctly.");
