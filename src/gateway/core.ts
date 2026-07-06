@@ -1,5 +1,6 @@
 // Shared gateway logic used by both Express and Hono gateway adapters.
 
+import { z } from "zod";
 import type { SupportedPaymentKind } from "x402/types";
 import type {
   ForwardBody,
@@ -16,6 +17,7 @@ export type { PeerResponse } from "./types.js";
 
 export const VERIFY_TIMEOUT = 10_000;
 export const SETTLE_TIMEOUT = 30_000;
+export const SUPPORTED_TIMEOUT = 5_000;
 export const SELECTION_TTL_MS = 1 * 60_000; // sticky selection expires after 1 minute
 export const REGISTRY_TTL_MS = 2 * 60_000; // registered peers expire if no heartbeat
 export const CLEANUP_INTERVAL_MS = 30_000; // cleanup runs every 30 seconds
@@ -51,6 +53,20 @@ export async function postJson<T = unknown>(
       parsed = text as T;
     }
     return { status: res.status, body: parsed };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function getJson<T = unknown>(
+  url: string,
+  timeoutMs: number
+): Promise<T> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    return (await res.json()) as T;
   } finally {
     clearTimeout(t);
   }
@@ -101,7 +117,11 @@ export function getPayerFromVerifyResponse(
 
 export function rotateToNext(peers: string[], current: string): string[] {
   if (peers.length <= 1) return peers.slice();
-  const rest = peers.filter((p) => p !== current).sort(() => Math.random() - 0.5);
+  const rest = peers.filter((p) => p !== current);
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rest[i], rest[j]] = [rest[j], rest[i]];
+  }
   return [current, ...rest];
 }
 
@@ -222,7 +242,8 @@ export class PeerRegistry {
   }
 
   register(url: string, kinds?: SupportedPaymentKind[]): void {
-    this.registered.set(url, { url, kinds, lastSeenMs: Date.now() });
+    const key = normalizeUrl(url);
+    this.registered.set(key, { url: key, kinds, lastSeenMs: Date.now() });
   }
 
   getActivePeers(staticPeers: string[]): string[] {
@@ -267,15 +288,15 @@ export class PeerRegistry {
 // ─── Aggregation helper ──────────────────────────────────────────────────────
 
 export async function aggregateSupportedKinds(
-  peers: string[]
+  peers: string[],
+  timeoutMs: number = SUPPORTED_TIMEOUT
 ): Promise<SupportedPaymentKind[]> {
   if (!peers || peers.length === 0) return [];
   const results = await Promise.allSettled(
     peers.map(async (base) => {
       try {
         const url = normalizeUrl(base) + "/supported";
-        const r = await fetch(url);
-        const j = (await r.json()) as { kinds?: SupportedPaymentKind[] };
+        const j = await getJson<{ kinds?: SupportedPaymentKind[] }>(url, timeoutMs);
         return Array.isArray(j?.kinds) ? j.kinds : [];
       } catch {
         return [] as SupportedPaymentKind[];
@@ -292,6 +313,103 @@ export async function aggregateSupportedKinds(
     seen.add(key);
     return true;
   });
+}
+
+// ─── Framework-agnostic request handlers ─────────────────────────────────────
+
+export type GatewayResult = { status: number; body: unknown };
+
+type GatewayHandlerOptions = {
+  peers: string[];
+  inbound: ForwardBody;
+  sticky: StickyRouter;
+  debug?: boolean;
+  logPrefix?: string;
+};
+
+function describeError(e: unknown): string {
+  if (e instanceof Error && e.name === "AbortError") return "timed out";
+  return "network error: " + (e instanceof Error ? e.message : String(e));
+}
+
+export async function handleGatewayVerify(opts: GatewayHandlerOptions): Promise<GatewayResult> {
+  const { peers, sticky, debug, logPrefix = "[gateway]" } = opts;
+  if (!peers || peers.length === 0) return { status: 503, body: { error: "No peers configured" } };
+
+  const forwardBody = normalizeForwardBody(opts.inbound);
+
+  try {
+    const primary = pickSelectedPeerForVerify(peers);
+    const order = rotateToNext(peers, primary);
+    let lastError: PeerResponse | undefined;
+    for (const base of order) {
+      const url = normalizeUrl(base) + "/verify";
+      try {
+        if (debug) console.log(logPrefix, "verify via", url);
+        const response = await postJson(url, forwardBody, VERIFY_TIMEOUT);
+        if (response.status === 200) {
+          sticky.recordSelection(base, forwardBody, response.body);
+          return { status: 200, body: response.body };
+        }
+        if (debug) console.log(logPrefix, "verify non-200 from", url, response.status, response.body);
+        lastError = response;
+      } catch (e: unknown) {
+        if (debug) console.log(logPrefix, "verify failed for", url, describeError(e));
+      }
+    }
+    if (lastError) return { status: lastError.status, body: lastError.body };
+    return { status: 503, body: { error: "Verification unavailable" } };
+  } catch (err: unknown) {
+    return {
+      status: 500,
+      body: { error: "Internal error", message: err instanceof Error ? err.message : "Unknown error" },
+    };
+  }
+}
+
+export async function handleGatewaySettle(opts: GatewayHandlerOptions): Promise<GatewayResult> {
+  const { peers, sticky, debug, logPrefix = "[gateway]" } = opts;
+  if (!peers || peers.length === 0) {
+    return { status: 503, body: { success: false, error: "No peers configured", txHash: null, networkId: null } };
+  }
+
+  const forwardBody = normalizeForwardBody(opts.inbound);
+  const preferred = sticky.getPreferredPeer(forwardBody) ?? pickSelectedPeerForVerify(peers);
+  const order = rotateToNext(peers, preferred);
+
+  for (const peer of order) {
+    const url = normalizeUrl(peer) + "/settle";
+    try {
+      if (debug) console.log(logPrefix, "settling via", url);
+      const response = await postJson(url, forwardBody, SETTLE_TIMEOUT);
+      if (response.status === 200) return { status: 200, body: response.body };
+      if (debug) console.log(logPrefix, "settle non-200 from", url, response.status, response.body);
+    } catch (err: unknown) {
+      if (debug) console.log(logPrefix, "settle failed for", url, describeError(err));
+    }
+  }
+  return { status: 503, body: { success: false, error: "Settle unavailable", txHash: null, networkId: null } };
+}
+
+// Intentionally looser than x402's SupportedPaymentKindSchema: its network enum
+// is pinned to the installed x402 version, and peers may support newer networks.
+const registerKindsSchema = z.array(
+  z
+    .object({ x402Version: z.number(), scheme: z.string(), network: z.string() })
+    .passthrough()
+) as z.ZodType<SupportedPaymentKind[]>;
+
+export function handleGatewayRegister(registry: PeerRegistry, inbound: unknown): GatewayResult {
+  try {
+    const body = inbound as { url?: string; kinds?: unknown };
+    const url = String(body?.url || "").trim();
+    if (!url || !/^https?:\/\//i.test(url)) return { status: 400, body: { error: "Invalid url" } };
+    const parsedKinds = registerKindsSchema.safeParse(body?.kinds);
+    registry.register(url, parsedKinds.success ? parsedKinds.data : undefined);
+    return { status: 200, body: { ok: true } };
+  } catch (e: unknown) {
+    return { status: 400, body: { error: e instanceof Error ? e.message : "Invalid request" } };
+  }
 }
 
 // ─── Shared gateway options type ─────────────────────────────────────────────

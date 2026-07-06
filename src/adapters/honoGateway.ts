@@ -1,17 +1,13 @@
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
   type GatewayOptions,
-  type PeerResponse,
-  postJson,
-  normalizeForwardBody,
-  normalizeUrl,
-  pickSelectedPeerForVerify,
-  rotateToNext,
   aggregateSupportedKinds,
+  handleGatewayVerify,
+  handleGatewaySettle,
+  handleGatewayRegister,
   StickyRouter,
   PeerRegistry,
-  VERIFY_TIMEOUT,
-  SETTLE_TIMEOUT,
 } from "../gateway/core.js";
 
 export type HonoGatewayOptions = GatewayOptions;
@@ -33,6 +29,7 @@ export function createHonoGatewayAdapter(options: HonoGatewayOptions): Hono {
   const app = new Hono();
   const sticky = new StickyRouter();
   const registry = new PeerRegistry();
+  const logPrefix = "[hono-gateway]";
 
   function peers(): string[] {
     return registry.getActivePeers(options.httpPeers ?? []);
@@ -46,75 +43,23 @@ export function createHonoGatewayAdapter(options: HonoGatewayOptions): Hono {
 
   // POST /verify — single randomly selected node (stick to this node by payer/header)
   app.post("/verify", async (c) => {
-    const activePeers = peers();
-    if (!activePeers || activePeers.length === 0) return c.json({ error: "No peers configured" }, 503);
-
     const inbound = await c.req.json();
-    const forwardBody = normalizeForwardBody(inbound);
-
-    try {
-      const primary = pickSelectedPeerForVerify(activePeers);
-      const order = rotateToNext(activePeers, primary);
-      let lastError: PeerResponse | undefined;
-      for (const base of order) {
-        const url = normalizeUrl(base) + "/verify";
-        try {
-          if (options.debug) console.log("[hono-gateway] verify via", url);
-          const response = await postJson(url, forwardBody, VERIFY_TIMEOUT);
-          if (response.status === 200) {
-            sticky.recordSelection(base, forwardBody, response.body);
-            return c.json(response.body);
-          }
-          if (options.debug) console.log("[hono-gateway] verify non-200 from", url, response.status, response.body);
-          lastError = response;
-        } catch (e: unknown) {
-          if (options.debug) console.log("[hono-gateway] verify network error from", url, e instanceof Error ? e.message : e);
-        }
-      }
-      if (lastError) return c.json(lastError.body, lastError.status as 400);
-      return c.json({ error: "Verification unavailable" }, 503);
-    } catch (err: unknown) {
-      return c.json({ error: "Internal error", message: err instanceof Error ? err.message : "Unknown error" }, 500);
-    }
+    const r = await handleGatewayVerify({ peers: peers(), inbound, sticky, debug: options.debug, logPrefix });
+    return c.json(r.body, r.status as ContentfulStatusCode);
   });
 
   // POST /settle — use the same selected node (sticky by payer/header); fallback to others on failure
   app.post("/settle", async (c) => {
-    const activePeers = peers();
-    if (!activePeers || activePeers.length === 0) {
-      return c.json({ success: false, error: "No peers configured", txHash: null, networkId: null }, 503);
-    }
-
     const inbound = await c.req.json();
-    const forwardBody = normalizeForwardBody(inbound);
-    const preferred = sticky.getPreferredPeer(forwardBody) ?? pickSelectedPeerForVerify(activePeers);
-    const order = rotateToNext(activePeers, preferred);
-
-    for (const peer of order) {
-      const url = normalizeUrl(peer) + "/settle";
-      try {
-        if (options.debug) console.log("[hono-gateway] settling via", url);
-        const response = await postJson(url, forwardBody, SETTLE_TIMEOUT);
-        if (response.status === 200) return c.json(response.body);
-        if (options.debug) console.log("[hono-gateway] settle non-200 from", url, response.status, response.body);
-      } catch (err: unknown) {
-        if (options.debug) console.log("[hono-gateway] settle network error from", url, err instanceof Error ? err.message : err);
-      }
-    }
-    return c.json({ success: false, error: "Settle unavailable", txHash: null, networkId: null }, 503);
+    const r = await handleGatewaySettle({ peers: peers(), inbound, sticky, debug: options.debug, logPrefix });
+    return c.json(r.body, r.status as ContentfulStatusCode);
   });
 
   // POST /register — nodes can self-register with the gateway
   app.post("/register", async (c) => {
-    try {
-      const body = (await c.req.json()) as { url?: string; kinds?: unknown[] };
-      const url = String(body?.url || "").trim();
-      if (!url || !/^https?:\/\//i.test(url)) return c.json({ error: "Invalid url" }, 400);
-      registry.register(url, body?.kinds as Parameters<typeof registry.register>[1]);
-      return c.json({ ok: true });
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : "Invalid request" }, 400);
-    }
+    const inbound = await c.req.json().catch(() => undefined);
+    const r = handleGatewayRegister(registry, inbound);
+    return c.json(r.body, r.status as ContentfulStatusCode);
   });
 
   // GET /peers — diagnostic endpoint
