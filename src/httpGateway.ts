@@ -1,227 +1,57 @@
 import type { Router, Request, Response } from "express";
+import {
+  type GatewayOptions,
+  aggregateSupportedKinds,
+  handleGatewayVerify,
+  handleGatewaySettle,
+  handleGatewayRegister,
+  StickyRouter,
+  PeerRegistry,
+} from "./gateway/core.js";
 
-export type HttpGatewayOptions = {
-  basePath?: string;
-  httpPeers: string[]; // e.g. ["http://localhost:4101/facilitator", "http://localhost:4102/facilitator"]
-  debug?: boolean;
-};
-
-async function postJson(url: string, body: unknown, timeoutMs: number): Promise<{ status: number; body: any }> {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    } as any);
-    const text = await res.text();
-    let parsed: any;
-    try { parsed = text ? JSON.parse(text) : undefined; } catch { parsed = text; }
-    return { status: res.status, body: parsed };
-  } finally {
-    clearTimeout(t);
-  }
-}
+export type HttpGatewayOptions = GatewayOptions;
 
 export function createHttpGatewayAdapter(router: Router, options: HttpGatewayOptions): void {
   const basePath = options.basePath ?? "";
-  const verifyTimeout = 10_000;
-  const settleTimeout = 30_000;
-  const selectionTtlMs = 1 * 60_000; // keep selection for 1 minutes by default
-  const registryTtlMs = 2 * 60_000; // registered peers expire if no heartbeat
+  const sticky = new StickyRouter();
+  const registry = new PeerRegistry();
+  const logPrefix = "[http-gateway]";
 
   function normalizePath(path: string): string {
     const p = basePath + path;
     return p || "/";
   }
 
-  function pickRandom<T>(arr: T[]): T {
-    return arr[Math.floor(Math.random() * arr.length)];
-  }
-
-  function getHeaderFromBody(body: any): string | undefined {
-    // Prefer explicit header fields if present (EVM flow)
-    const header = body?.paymentHeader ?? body?.paymentPayload?.header;
-    if (header) return header;
-    // For Solana, we don't have a header; use the raw transaction blob as a sticky key
-    const solanaTx = body?.paymentPayload?.payload?.transaction;
-    if (typeof solanaTx === "string" && solanaTx.length > 0) return solanaTx;
-    return undefined;
-  }
-
-  const selectionByHeader = new Map<string, { peer: string; expiresAt: number }>();
-  const selectionByPayer = new Map<string, { peer: string; expiresAt: number }>();
-  const registeredPeers = new Map<string, { url: string; kinds?: any[]; lastSeenMs: number }>();
-
-  // Select a random peer. We will persist the chosen peer AFTER a successful verify
-  // so that subsequent settle for the same header uses the same node.
-  function pickSelectedPeerForVerify(peers: string[]): string {
-    if (peers.length === 1) return peers[0];
-    return pickRandom(peers);
-  }
-
-  function getPayerFromBody(body: any): string | undefined {
-    try {
-      return body?.paymentPayload?.payload?.authorization?.from;
-    } catch {
-      return undefined;
-    }
-  }
-
-  function getPayerFromVerifyResponse(respBody: any): string | undefined {
-    if (respBody && typeof respBody === "object") {
-      const p = (respBody as any).payer;
-      if (typeof p === "string" && p.length > 0) return p;
-    }
-    return undefined;
-  }
-
-  function rotateToNext(peers: string[], current: string): string[] {
-    if (peers.length <= 1) return peers.slice();
-    const rest = peers.filter((p) => p !== current).sort(() => Math.random() - 0.5);
-    return [current, ...rest];
+  function peers(): string[] {
+    return registry.getActivePeers(options.httpPeers ?? []);
   }
 
   // GET /supported — aggregate from peers
   router.get(normalizePath("/supported"), async (_req: Request, res: Response) => {
-    const peers = getActivePeers();
-    if (!peers || peers.length === 0) return res.status(200).json({ kinds: [] });
-    const results = await Promise.allSettled(peers.map(async (base) => {
-      try {
-        const url = base.replace(/\/$/, "") + "/supported";
-        const r = await fetch(url);
-        const j = await r.json();
-        return Array.isArray(j?.kinds) ? j.kinds : [];
-      } catch {
-        return [] as any[];
-      }
-    }));
-    const kinds: any[] = [];
-    for (const r of results) if (r.status === "fulfilled") kinds.push(...r.value);
-    const seen = new Set<string>();
-    const uniq = kinds.filter((k) => {
-      const key = JSON.stringify(k);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return res.status(200).json({ kinds: uniq });
+    const kinds = await aggregateSupportedKinds(peers());
+    return res.status(200).json({ kinds });
   });
 
   // POST /verify — single randomly selected node (stick to this node by payer/header)
   router.post(normalizePath("/verify"), async (req: Request, res: Response) => {
-    const peers = getActivePeers();
-    if (!peers || peers.length === 0) return res.status(503).json({ error: "No peers configured" });
-
-    // Accept both spec and internal body shapes
-    const inbound = req.body as any;
-    const forwardBody = inbound?.paymentPayload && inbound?.paymentRequirements
-      ? inbound
-      : inbound?.paymentHeader && inbound?.paymentRequirements
-        ? { paymentPayload: { header: inbound.paymentHeader }, paymentRequirements: inbound.paymentRequirements }
-        : inbound;
-
-    try {
-      const primary = pickSelectedPeerForVerify(peers);
-      const order = rotateToNext(peers, primary);
-      let lastError: { status: number; body: any } | undefined;
-      for (const base of order) {
-        const url = base.replace(/\/$/, "") + "/verify";
-        try {
-          if (options.debug) console.log("[http-gateway] verify via", url);
-          const response = await postJson(url, forwardBody, verifyTimeout);
-          if (response.status === 200) {
-            // Store sticky selection for future settle by payer (preferred) and header (fallback)
-            const now = Date.now();
-            const payer = getPayerFromVerifyResponse(response.body) ?? getPayerFromBody(forwardBody);
-            if (payer) selectionByPayer.set(payer.toLowerCase(), { peer: base, expiresAt: now + selectionTtlMs });
-            const key = getHeaderFromBody(forwardBody);
-            if (key) selectionByHeader.set(key, { peer: base, expiresAt: now + selectionTtlMs });
-            return res.status(200).json(response.body);
-          }
-          if (options.debug) console.log("[http-gateway] verify non-200 from", url, response.status, response.body);
-          lastError = { status: response.status, body: response.body };
-        } catch (e: any) {
-          if (options.debug) console.log("[http-gateway] verify network error from", url, e?.message);
-        }
-      }
-      if (lastError) return res.status(lastError.status).json(lastError.body);
-      return res.status(503).json({ error: "Verification unavailable" });
-    } catch (err: any) {
-      return res.status(500).json({ error: "Internal error", message: err?.message });
-    }
+    const r = await handleGatewayVerify({ peers: peers(), inbound: req.body, sticky, debug: options.debug, logPrefix });
+    return res.status(r.status).json(r.body);
   });
-
 
   // POST /settle — use the same selected node (sticky by payer/header); fallback to others on failure
   router.post(normalizePath("/settle"), async (req: Request, res: Response) => {
-    const peers = getActivePeers();
-    if (!peers || peers.length === 0) return res.status(503).json({ success: false, error: "No peers configured", txHash: null, networkId: null });
-    const inbound = req.body as any;
-    const forwardBody = inbound?.paymentPayload && inbound?.paymentRequirements
-      ? inbound
-      : inbound?.paymentHeader && inbound?.paymentRequirements
-        ? { paymentPayload: { header: inbound.paymentHeader }, paymentRequirements: inbound.paymentRequirements }
-        : inbound;
-    // Use sticky selection first (payer), then header, then random
-    const payer = getPayerFromBody(forwardBody)?.toLowerCase();
-    const now = Date.now();
-    const byPayer = payer ? selectionByPayer.get(payer) : undefined;
-    const chosenByPayer = byPayer && byPayer.expiresAt > now ? byPayer.peer : undefined;
-    const key = getHeaderFromBody(forwardBody);
-    const byHeader = key ? selectionByHeader.get(key) : undefined;
-    const chosenByHeader = byHeader && byHeader.expiresAt > now ? byHeader.peer : undefined;
-    const preferred = chosenByPayer ?? chosenByHeader ?? pickSelectedPeerForVerify(peers);
-    const order = rotateToNext(peers, preferred);
-    for (const peer of order) {
-      const url = peer.replace(/\/$/, "") + "/settle";
-      try {
-        if (options.debug) console.log("[http-gateway] settling via", url);
-        const response = await postJson(url, forwardBody, settleTimeout);
-        if (response.status === 200) return res.status(200).json(response.body);
-        if (options.debug) console.log("[http-gateway] settle non-200 from", url, response.status, response.body);
-        // try next peer
-      } catch (err: any) {
-        if (options.debug) console.log("[http-gateway] settle network error from", url, err?.message);
-        // try next peer
-      }
-    }
-    return res.status(503).json({ success: false, error: "Settle unavailable", txHash: null, networkId: null });
+    const r = await handleGatewaySettle({ peers: peers(), inbound: req.body, sticky, debug: options.debug, logPrefix });
+    return res.status(r.status).json(r.body);
   });
 
   // POST /register — nodes can self-register with the gateway
-  // Body: { url: string; kinds?: any[] }
   router.post(normalizePath("/register"), async (req: Request, res: Response) => {
-    try {
-      const url = String((req.body as any)?.url || "").trim();
-      if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ error: "Invalid url" });
-      const kinds = (req.body as any)?.kinds;
-      registeredPeers.set(url, { url, kinds, lastSeenMs: Date.now() });
-      return res.status(200).json({ ok: true });
-    } catch (e: any) {
-      return res.status(400).json({ error: e?.message || "Invalid request" });
-    }
+    const r = handleGatewayRegister(registry, req.body);
+    return res.status(r.status).json(r.body);
   });
-
-  function getActivePeers(): string[] {
-    const out = new Set<string>();
-    // include statically configured peers (if any)
-    for (const p of options.httpPeers ?? []) out.add(p.replace(/\/$/, ""));
-    // include registered peers within TTL
-    const now = Date.now();
-    for (const { url, lastSeenMs } of registeredPeers.values()) {
-      if (now - lastSeenMs <= registryTtlMs) out.add(url.replace(/\/$/, ""));
-    }
-    return Array.from(out);
-  }
 
   // Optional: expose current active peers for external load balancers/diagnostics
   router.get(normalizePath("/peers"), (_req: Request, res: Response) => {
-    return res.status(200).json({ peers: getActivePeers() });
+    return res.status(200).json({ peers: peers() });
   });
-
 }
-
-

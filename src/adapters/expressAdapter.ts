@@ -1,5 +1,6 @@
 import type { Request, Response, Router } from "express";
-import type { Facilitator } from "./facilitator";
+import type { Facilitator } from "../facilitator.js";
+import { formatError } from "./shared/errorHandler.js";
 
 export function createExpressAdapter(
   facilitator: Facilitator,
@@ -16,10 +17,7 @@ export function createExpressAdapter(
       const response = await facilitator.handleRequest({ method: "GET", path: "/supported" });
       res.status(response.status).json(response.body);
     } catch (error) {
-      res.status(500).json({
-        error: "Internal server error",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
+      res.status(500).json(formatError(error));
     }
   });
 
@@ -28,10 +26,7 @@ export function createExpressAdapter(
       const response = await facilitator.handleRequest({ method: "POST", path: "/verify", body: req.body });
       res.status(response.status).json(response.body);
     } catch (error) {
-      res.status(500).json({
-        error: "Internal server error",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
+      res.status(500).json(formatError(error));
     }
   });
 
@@ -40,12 +35,7 @@ export function createExpressAdapter(
       const response = await facilitator.handleRequest({ method: "POST", path: "/settle", body: req.body });
       res.status(response.status).json(response.body);
     } catch (error) {
-      res.status(500).json({
-        error: "Internal server error",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
+      res.status(500).json(formatError(error));
     }
   });
 }
-
-

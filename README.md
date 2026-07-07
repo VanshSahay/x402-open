@@ -4,18 +4,25 @@ Decentralized facilitator toolkit for the X402 protocol. Run a facilitator node 
 
 - Facilitator node: EVM + SVM (Solana) support
 - Express adapter: mounts `/supported`, `/verify`, `/settle`
-- HTTP gateway: routes `verify` and `settle` across many nodes
+- Hono adapter: same routes, idiomatic Hono usage - import from `x402-open/hono`
+- HTTP gateway: routes `verify` and `settle` across many nodes (Express or Hono)
 - Auto-registration: nodes can self-register with the gateway (no manual peer lists)
 
 ## Installation
 
 ```bash
+# Express
 pnpm add x402-open express viem
 # or
 npm i x402-open express viem
+
+# Hono
+pnpm add x402-open hono viem
+# or
+npm i x402-open hono viem
 ```
 
-`express` is a peer dependency.
+`express` and `hono` are optional peer dependencies — install whichever you use.
 
 ---
 ## Run a facilitator node
@@ -91,6 +98,33 @@ app.listen(4021, () => console.log("Server on http://localhost:4021"));
 ```
 
 ---
+
+## Run a facilitator node (Hono)
+
+```ts
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
+import { Facilitator } from "x402-open";
+import { createHonoAdapter } from "x402-open/hono";
+import { baseSepolia } from "viem/chains";
+
+const facilitator = new Facilitator({
+  evmPrivateKey: process.env.PRIVATE_KEY as `0x${string}`,
+  evmNetworks: [baseSepolia],
+  // svmPrivateKey: process.env.SOLANA_PRIVATE_KEY!,
+  // svmNetworks: ["solana-devnet"],
+});
+
+const app = new Hono();
+app.route("/facilitator", createHonoAdapter(facilitator));
+
+serve({ fetch: app.fetch, port: 4101 }, () =>
+  console.log("Hono Node on http://localhost:4101")
+);
+```
+
+---
+
 ## Run the HTTP gateway (single URL for many nodes)
 
 ```ts
@@ -112,6 +146,27 @@ createHttpGatewayAdapter(app, {
 });
 
 app.listen(8080, () => console.log("HTTP Gateway on http://localhost:8080"));
+```
+
+### Hono gateway variant
+
+```ts
+import { Hono } from "hono";
+import { serve } from "@hono/node-server";
+import { createHonoGatewayAdapter } from "x402-open/hono";
+
+const app = new Hono();
+app.route("/facilitator", createHonoGatewayAdapter({
+  httpPeers: [
+    "http://localhost:4101/facilitator",
+    // "http://localhost:4102/facilitator",
+  ],
+  debug: true,
+}));
+
+serve({ fetch: app.fetch, port: 8080 }, () =>
+  console.log("Hono Gateway on http://localhost:8080")
+);
 ```
 
 ### Gateway behavior

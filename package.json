@@ -11,6 +11,11 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./hono": {
+      "types": "./dist/hono.d.ts",
+      "import": "./dist/hono.js",
+      "default": "./dist/hono.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
@@ -31,6 +36,7 @@
   "license": "ISC",
   "packageManager": "pnpm@10.14.0",
   "devDependencies": {
+    "@hono/node-server": "^1.19.9",
     "@types/express": "^4.17.21",
     "@types/node": "^24.9.2",
     "@types/supertest": "^2.0.16",
@@ -40,16 +46,21 @@
     "vitest": "^2.1.4"
   },
   "dependencies": {
+    "@scure/base": "^1.1.9",
     "@solana/kit": "^5.0.0",
     "@solana/web3.js": "^1.95.3",
     "bs58": "^6.0.0",
     "dotenv": "^16.4.5",
     "viem": "^2.21.34",
-    "@scure/base": "^1.1.9",
-    "zod": "^3.23.8",
-    "x402": "^0.7.0"
+    "x402": "^0.7.0",
+    "zod": "^3.23.8"
   },
   "peerDependencies": {
-    "express": ">=4"
+    "express": ">=4",
+    "hono": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "express": { "optional": true },
+    "hono": { "optional": true }
   }
 }

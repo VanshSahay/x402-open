@@ -21,9 +21,9 @@ vi.mock("x402/facilitator", () => ({
   settle: vi.fn(async (_signer: any, _payload: any, _reqs: any) => ({ txHash: "0xE2E" })),
 }));
 
-import { Facilitator } from "../src/facilitator.js";
-import { createExpressAdapter } from "../src/expressAdapter.js";
-import { createHttpGatewayAdapter } from "../src/httpGateway.js";
+import { Facilitator } from "../src/facilitator";
+import { createExpressAdapter } from "../src/adapters/expressAdapter";
+import { createHttpGatewayAdapter } from "../src/httpGateway";
 
 function startServer(app: express.Express): Promise<{ server: any; url: string }>{
   return new Promise((resolve) => {

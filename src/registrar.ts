@@ -1,8 +1,10 @@
+import type { SupportedPaymentKind } from "x402/types";
+
 export type NodeRegistrarOptions = {
   gatewayUrls: string[];
   nodeBaseUrl: string; // e.g. http://localhost:4101/facilitator
   intervalMs?: number; // default 30s
-  kindsProvider?: () => Promise<any[]>; // optional
+  kindsProvider?: () => Promise<SupportedPaymentKind[]>;
   debug?: boolean;
 };
 
@@ -22,8 +24,8 @@ export function startGatewayRegistration(opts: NodeRegistrarOptions): () => void
       try {
         const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body });
         if (opts.debug) console.log("[registrar]", url, res.status);
-      } catch (e: any) {
-        if (opts.debug) console.log("[registrar] failed", url, e?.message);
+      } catch (e: unknown) {
+        if (opts.debug) console.log("[registrar] failed", url, e instanceof Error ? e.message : e);
       }
     }
   }
@@ -37,7 +39,7 @@ export function startGatewayRegistration(opts: NodeRegistrarOptions): () => void
   };
 }
 
-async function safeKinds(fn: () => Promise<any[]>) {
+async function safeKinds(fn: () => Promise<SupportedPaymentKind[]>): Promise<SupportedPaymentKind[] | undefined> {
   try {
     const v = await fn();
     return Array.isArray(v) ? v : undefined;
@@ -45,5 +47,3 @@ async function safeKinds(fn: () => Promise<any[]>) {
     return undefined;
   }
 }
-
-

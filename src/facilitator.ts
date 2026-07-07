@@ -53,7 +53,6 @@ export class Facilitator {
     this.evmNetworks = (config.evmNetworks ?? config.networks) ?? [];
     this.svmNetworks = config.svmNetworks ?? (this.svmPrivateKey ? ["solana-devnet"] : []);
     this.x402Config = this.svmRpcUrl ? { svmConfig: { rpcUrl: this.svmRpcUrl } } : undefined;
-
   }
 
   async handleRequest(req: HandlerRequest): Promise<HandlerResponse> {
@@ -126,8 +125,8 @@ export class Facilitator {
 
     if (this.svmPrivateKey && this.svmNetworks.length > 0) {
       for (const network of this.svmNetworks) {
-        if (!SupportedSVMNetworks.includes(network as any)) continue;
-        const signer = await createSigner(network as any, this.svmPrivateKey);
+        if (!SupportedSVMNetworks.includes(network as SupportedPaymentKind["network"])) continue;
+        const signer = await createSigner(network as SupportedPaymentKind["network"], this.svmPrivateKey);
         const feePayer = isSvmSignerWallet(signer) ? signer.address : undefined;
         kinds.push({ x402Version: 1, scheme: "exact", network: network as SupportedPaymentKind["network"], extra: { feePayer } });
       }
@@ -144,5 +143,3 @@ export class Facilitator {
     return network;
   }
 }
-
-

@@ -1,4 +1,4 @@
 export { Facilitator } from "./facilitator.js";
-export { createExpressAdapter } from "./expressAdapter.js";
+export { createExpressAdapter } from "./adapters/expressAdapter.js";
 export { createHttpGatewayAdapter } from "./httpGateway.js";
 export { startGatewayRegistration } from "./registrar.js";
